@@ -29,7 +29,7 @@ def fast_reject(text: str) -> str | None:
 
 @router.get("/")
 def home():
-    return {"status": "Server is running!", "version": "5.0 Modular", "engine": "Nexus Universal"}
+    return {"status": "Server is running!", "version": "5.0 Modular", "engine": "OppTrax Universal"}
 
 @router.get("/webhook")
 def verify_whatsapp(request: Request):
@@ -68,7 +68,7 @@ async def process_whatsapp_payload(payload: dict):
                 "chat_context_id": None
             })
             welcome_text = (
-                "*Welcome to Nexus Universal Agent!*\n\n"
+                "*Welcome to OppTrax Universal Agent!*\n\n"
                 "I am your autonomous web scouting companion. You can use these commands anytime:\n"
                 "- *list* - View all active scouts\n"
                 "- *stop <Task ID>* - Stop a scout\n"
@@ -269,7 +269,7 @@ async def process_whatsapp_payload(payload: dict):
                 send_whatsapp_message(sender_phone, "Setup complete! You can now ask me to track anything (e.g. 'Notify me as soon as a new AI startup funding seed round gets announced').\n\n_Note: You can still upload a resume PDF at any time later to enable career scoring!_")
             else:
                 welcome_text = (
-                    "*Welcome to Nexus Universal Agent!*\n\n"
+                    "*Welcome to OppTrax Universal Agent!*\n\n"
                     "I am your autonomous web scouting companion. You can use these commands anytime:\n"
                     "- *list* - View all active scouts\n"
                     "- *stop <Task ID>* - Stop a scout\n"
@@ -356,7 +356,7 @@ async def process_whatsapp_payload(payload: dict):
                     send_whatsapp_message(sender_phone, res.text)
                     return {"status": "success"}
 
-                rag_prompt = f"You are Nexus AI Assistant. Your task is to comprehensively answer the user's question about the following scraped opportunity:\n{opp.get('raw_content', '')}\n\nCRITICAL INSTRUCTION: You MUST use Google Search to cross-reference this opportunity, find missing details (like exact stipends, deadlines, official links, or company reputation), and ensure your answer is fully up-to-date and accurate before replying.\nQuestion: {target_text}"
+                rag_prompt = f"You are OppTrax AI Assistant. Your task is to comprehensively answer the user's question about the following scraped opportunity:\n{opp.get('raw_content', '')}\n\nCRITICAL INSTRUCTION: You MUST use Google Search to cross-reference this opportunity, find missing details (like exact stipends, deadlines, official links, or company reputation), and ensure your answer is fully up-to-date and accurate before replying.\nQuestion: {target_text}"
                 try:
                     res = gemini_client.models.generate_content(
                         model=GATEKEEPER_MODEL, 

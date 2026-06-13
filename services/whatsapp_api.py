@@ -75,7 +75,7 @@ def send_scout_list_menu(to_phone: str, active_tasks: list):
         "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "text", "text": "Nexus Control Panel"},
+            "header": {"type": "text", "text": "OppTrax Control Panel"},
             "body": {"text": "Select a scout from the list below to inspect findings or manage execution."},
             "footer": {"text": f"{len(active_tasks)} active scout(s)"},
             "action": {

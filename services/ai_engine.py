@@ -10,7 +10,7 @@ def analyze_intent(raw_text: str, user_profile: dict = None) -> dict:
     print(f"[GATEKEEPER] Analyzing raw intent: {raw_text[:50]}...", flush=True)
     profile_context = f"\nUser Profile Data Matrix: {user_profile}" if user_profile else "\nUser Profile Status: Anonymous"
     
-    prompt = f"""You are the Dual-Routing Intent Center for Nexus, an autonomous web-agent platform.
+    prompt = f"""You are the Dual-Routing Intent Center for OppTrax, an autonomous web-agent platform.
     The user has just texted: "{raw_text}"
     {profile_context}
     
@@ -86,7 +86,7 @@ def enrich_findings_with_websearch(findings_list: list) -> str:
     findings_context = "\n".join([f"- {f.get('text', '')}" for f in findings_list])
     
     prompt = f"""
-    You are Nexus, an elite autonomous research agent. 
+    You are OppTrax, an elite autonomous research agent. 
     I have just scraped the following raw findings from the web:
     {findings_context}
     

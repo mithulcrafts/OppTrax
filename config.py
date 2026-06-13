@@ -30,7 +30,7 @@ GIBBERISH_PATTERNS = {"asdf", "qwer", "zxcv", "jkl;", "1234", "test", "aaa", "bb
 HELP_KEYWORDS = {"help", "menu", "commands", "options", "what can you do", "how to use"}
 
 COMMAND_MENU = """
-*Nexus Command Center*
+*OppTrax Command Center*
 
 Here is what you can tell me to do:
 - *list* - View all active scouts.

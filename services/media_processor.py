@@ -25,7 +25,7 @@ def generate_sarvam_audio(text_to_speak: str) -> str | None:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
         if response.status_code == 200:
             audio_base64 = response.json()["audios"][0]
-            file_path = f"nexus_alert_{int(time.time())}.mp3"
+            file_path = f"opptrax_alert_{int(time.time())}.mp3"
             with open(file_path, "wb") as f:
                 f.write(base64.b64decode(audio_base64))
             print(f"[TTS] Audio saved to {file_path}", flush=True)

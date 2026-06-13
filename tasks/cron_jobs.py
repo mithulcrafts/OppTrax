@@ -28,7 +28,7 @@ async def deadline_reminder_loop():
                 opp = await opportunities_collection.find_one({"_id": track_item["opportunity_id"]})
                 
                 if opp:
-                    msg = f"[ALERT] *Nexus Deadline Reminder!*\n\nYour tracked opportunity *{opp.get('title')}* is closing soon!\n\nDon't forget to apply:\n{opp.get('url')}"
+                    msg = f"[ALERT] *OppTrax Deadline Reminder!*\n\nYour tracked opportunity *{opp.get('title')}* is closing soon!\n\nDon't forget to apply:\n{opp.get('url')}"
                     send_whatsapp_message(phone, msg)
                     
                     # Mark as reminded so we don't spam them
