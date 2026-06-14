@@ -121,15 +121,9 @@ async def verify_otp(req: VerifyOTPRequest):
         
         # Send greeting message
         welcome_text = (
-            "*Welcome to OppTrax Universal Agent!*\n\n"
-            "Your account has been successfully verified and activated from the website! 🎉\n\n"
-            "I am your autonomous web scouting companion. You can use these commands anytime:\n"
-            "- *list* - View all active scouts\n"
-            "- *stop <Task ID>* - Stop a scout\n"
-            "- *help* - Show the command menu\n\n"
-            "*Try asking me to track something:*\n"
-            "- \"Notify me as soon as a new AI startup funding seed round gets announced.\"\n"
-            "- \"Track new VC seed rounds announced in SF.\""
+            "You are successfully logged in to OppTrax Universal Agent!\n\n"
+            "New exciting opportunities await you!\n"
+            "Respond with some message to start."   
         )
         try:
             send_whatsapp_message(sanitized_phone, welcome_text)
@@ -142,8 +136,13 @@ async def verify_otp(req: VerifyOTPRequest):
                 {"whatsapp_phone": sanitized_phone},
                 {"$set": {"onboarding_state": "COMPLETED"}}
             )
+        welcome_text = (
+            "You are successfully logged in to OppTrax Universal Agent!\n\n"
+            "New exciting opportunities await you!\n"
+            "Respond with some message to start."   
+        )
         try:
-            send_whatsapp_message(sanitized_phone, "*Verification Successful!* Welcome back to OppTrax. Your tracker is active.")
+            send_whatsapp_message(sanitized_phone, welcome_text)
         except Exception as e:
             print(f"[OTP ERROR] Failed to send success verification message: {e}", flush=True)
 
