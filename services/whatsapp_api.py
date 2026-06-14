@@ -108,20 +108,26 @@ def send_action_buttons(to_phone: str, task_id: str, instruction: str, finding_c
 
 def send_opportunity_card(to_phone: str, finding_id: str, title: str, summary: str, url: str, task_type: str, priority_score: float = None, reasoning: str = None, deadline: str = None):
     """Generates the clean interactive UI card for showing findings to the user."""
-    card_text = f"*New Opportunity Found!*\n\n"
-    card_text += f"*Title:* {title}\n"
-    card_text += f"*Summary:* {summary}\n"
+    card_text_header = f"*New Opportunity Found!*\n\n*{title}*\n\n"
     
+    card_text_footer = ""
     if deadline and str(deadline).strip().lower() not in ["null", "none", "n/a", ""]:
         # Try to format date nicely if it's in ISO format
         try:
             dt = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
             formatted_date = dt.strftime("%B %d, %Y")
-            card_text += f"*Deadline:* {formatted_date}\n"
+            card_text_footer += f"*Deadline:* {formatted_date}\n\n"
         except:
-            card_text += f"*Deadline:* {deadline}\n"
+            card_text_footer += f"*Deadline:* {deadline}\n\n"
             
-    card_text += f"\n*Link:* {url}"
+    card_text_footer += f"*Link:* {url}"
+    
+    # WhatsApp interactive body text has a strict 1024 character limit
+    max_summary_len = 1024 - len(card_text_header) - len(card_text_footer) - 5
+    if len(summary) > max_summary_len:
+        summary = summary[:max_summary_len-3] + "..."
+        
+    card_text = f"{card_text_header}{summary}\n\n{card_text_footer}"
 
     buttons = [
         {"type": "reply", "reply": {"id": f"track_{finding_id}", "title": "Save to Board"}},

@@ -21,7 +21,7 @@ sarvam_client = SarvamAI(api_subscription_key=SARVAM_KEY) if SARVAM_KEY else Non
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 # Constants
-GATEKEEPER_MODEL = "gemini-2.5-flash"
+GATEKEEPER_MODEL = "gemini-3.5-flash"
 
 MIN_INPUT_LENGTH = 3
 MAX_INPUT_LENGTH = 500
@@ -39,8 +39,12 @@ Here is what you can tell me to do:
 
 *Examples of what you can ask me to track:*
 - "Notify me as soon as a new AI startup funding seed round gets announced."
+
 - "Track new VC seed rounds announced in SF."
+
 - "Notify me when new projects get added to European Summer of Code with their summary."
-- "Track free tech conferences and meetups in Bengaluru."
+
+- "Track free tech conferences and meetups for students in Bengaluru."
+
 - "Track international scholarships for computer science students."
 """

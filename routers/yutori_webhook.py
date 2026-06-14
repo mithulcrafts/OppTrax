@@ -62,7 +62,9 @@ async def process_yutori_payload(data: dict):
         
         For each individual opportunity/finding found:
         - Extract its title/role, URL, and deadline.
-        - The `summary` MUST BE HIGHLY DETAILED. Do NOT send minimal information. Include ALL relevant information provided such as exact deadlines, dates of the event, location, stipends, and specific prerequisites.
+        - The `summary` MUST BE HIGHLY DETAILED and highly readable. Do NOT send a wall of text.
+        - CRITICAL RULE: Format the `summary` strictly using bullet points (starting with "- ") and brief paragraphs. Leave a blank line between different sections. Include ALL relevant information provided such as exact deadlines, dates of the event, location, stipends, and specific prerequisites. 
+        - CRITICAL RULE: The `summary` MUST be under 1024 characters in length. You MUST be concise to ensure it fits within WhatsApp's strict character limits.
         - CRITICAL RULE: DO NOT use any emojis whatsoever in your output. Your summary must be professional, clean, and purely textual.
         - CRITICAL RULE: DO NOT start with conversational filler like "Here is...", "I found...", "Based on...". Start the summary directly with the factual content.
         - The `title` MUST be the exact canonical name of the opportunity/event. Do NOT paraphrase or abbreviate it.
@@ -118,9 +120,9 @@ async def process_yutori_payload(data: dict):
             if not isinstance(parsed, dict):
                 continue
                 
-            title_str = parsed.get("title", "New Update").strip()
-            url_str = parsed.get("url", "N/A").strip()
-            summary_str = parsed.get("summary", "").strip()
+            title_str = str(parsed.get("title") or "New Update").strip()
+            url_str = str(parsed.get("url") or "N/A").strip()
+            summary_str = str(parsed.get("summary") or "").strip()
             
             # Generate deterministic ID: hash of task_id + normalized(title + url)
             # Normalize to lowercase to prevent Gemini casing differences from creating duplicates
