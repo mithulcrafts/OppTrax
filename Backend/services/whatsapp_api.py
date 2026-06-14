@@ -5,7 +5,7 @@ import base64
 from datetime import datetime
 import re
 import html
-from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID, SARVAM_KEY
+from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID, SARVAM_KEY, WHATSAPP_OTP_TEMPLATE_NAME
 
 def _post_whatsapp(data: dict):
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -14,8 +14,16 @@ def _post_whatsapp(data: dict):
         res = requests.post(url, headers=headers, json=data, timeout=10)
         if res.status_code >= 400:
             print(f"WhatsApp API Error {res.status_code}: {res.text}", flush=True)
-    except Exception as e:
-        print(f"WhatsApp send error: {e}", flush=True)
+            try:
+                res_json = res.json()
+                error_msg = res_json.get("error", {}).get("message", "Unknown Meta API error")
+                error_code = res_json.get("error", {}).get("code", 0)
+                raise Exception(f"Meta API Error {error_code}: {error_msg}")
+            except ValueError:
+                raise Exception(f"Meta API Error Status {res.status_code}: {res.text}")
+    except requests.RequestException as e:
+        print(f"WhatsApp network error: {e}", flush=True)
+        raise Exception(f"WhatsApp Network Error: {e}")
 
 def format_html_for_whatsapp(raw_html: str) -> str:
     if not raw_html: return ""
@@ -192,3 +200,36 @@ def send_whatsapp_audio(to_phone: str, media_id: str):
         "type": "audio",
         "audio": {"id": media_id}
     })
+
+def send_otp_message(to_phone: str, otp_code: str):
+    """Sends OTP code via template if configured, otherwise falls back to a text message."""
+    if WHATSAPP_OTP_TEMPLATE_NAME:
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": WHATSAPP_OTP_TEMPLATE_NAME,
+                "language": {
+                    "code": "en_US"
+                },
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {
+                                "type": "text",
+                                "text": otp_code
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        _post_whatsapp(payload)
+    else:
+        # Fallback to standard text message
+        msg_text = f"Your OppTrax verification code is: *{otp_code}*\n\nIt is valid for 5 minutes. Enter this code on the website to complete your onboarding."
+        send_whatsapp_message(to_phone, msg_text)
+
