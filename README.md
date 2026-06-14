@@ -19,6 +19,9 @@ OppTrax is a multilingual WhatsApp-based AI Opportunity Copilot that discovers, 
 11. **Daily Opportunity Digest**: Receives a single consolidated message containing the top 3-5 matching opportunities daily.
 12. **Continuous Learning**: Learns preferences from interaction history to deliver increasingly personalized suggestions.
 
+<img width="1896" height="977" alt="image" src="https://github.com/user-attachments/assets/46285e6a-6624-4c57-9257-c9b433c52f71" />
+
+
 ---
 
 ## Getting Started
