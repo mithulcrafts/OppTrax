@@ -3,6 +3,8 @@ import time
 import base64
 import requests
 import fitz  # PyMuPDF
+import subprocess
+import glob
 from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID, SARVAM_KEY, sarvam_client
 from services.whatsapp_api import upload_whatsapp_media, send_whatsapp_audio
 
@@ -69,16 +71,45 @@ def download_whatsapp_media(media_id: str, ext: str = "ogg"):
 
 def transcribe_voice_note(file_path: str):
     try:
-        with open(file_path, "rb") as audio_file:
-            response = sarvam_client.speech_to_text.transcribe(
-                file=audio_file,
-                model="saaras:v3",
-                mode="translate",
-                language_code="hi-IN"
-            )
-            return response.transcript
+        base_name = os.path.basename(file_path)
+        chunk_pattern = f"temp_chunk_%03d_{base_name}.wav"
+        
+        # Use ffmpeg to split the file into 29 second chunks
+        # -y overwrites existing files without asking
+        cmd = [
+            "ffmpeg", "-y", "-i", file_path, 
+            "-f", "segment", "-segment_time", "29", 
+            chunk_pattern
+        ]
+        
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        
+        full_transcript = []
+        
+        # Find all generated chunks using glob
+        search_pattern = f"temp_chunk_*_{base_name}.wav"
+        chunks = sorted(glob.glob(search_pattern))
+        
+        for chunk_file in chunks:
+            try:
+                with open(chunk_file, "rb") as audio_file:
+                    response = sarvam_client.speech_to_text.transcribe(
+                        file=audio_file,
+                        model="saaras:v3",
+                        mode="translate",
+                        language_code="hi-IN"
+                    )
+                    if response and response.transcript:
+                        full_transcript.append(response.transcript)
+            except Exception as e:
+                print(f"Sarvam chunk failed ({chunk_file}): {e}")
+            finally:
+                if os.path.exists(chunk_file):
+                    os.remove(chunk_file)
+                    
+        return " ".join(full_transcript).strip() if full_transcript else None
     except Exception as e:
-        print(f"Sarvam Failed: {e}")
+        print(f"Sarvam processing Failed: {e}")
         return None
 
 def extract_text_from_pdf(file_path: str) -> str | None:

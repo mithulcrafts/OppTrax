@@ -8,7 +8,8 @@ from config import WHATSAPP_VERIFY_TOKEN, MIN_INPUT_LENGTH, MAX_INPUT_LENGTH, GI
 from database import users_collection, tasks_collection, opportunities_collection, tracked_collection
 from services.whatsapp_api import _post_whatsapp, send_whatsapp_message, send_onboarding_choices, send_scout_list_menu
 from services.media_processor import download_whatsapp_media, extract_text_from_pdf, transcribe_voice_note
-from services.ai_engine import build_user_profile, analyze_intent, gemini_client, GATEKEEPER_MODEL
+from services.ai_engine import build_user_profile, analyze_intent, GATEKEEPER_MODEL
+from config import generate_content_with_retry
 from services.yutori_client import launch_yutori_scout, terminate_yutori_scout
 from google.genai import types
 
@@ -41,9 +42,9 @@ def verify_whatsapp(request: Request):
     raise HTTPException(status_code=403, detail="Verification token mismatch")
 
 @router.post("/webhook")
-async def receive_whatsapp_message(request: Request, background_tasks: BackgroundTasks):
+async def receive_whatsapp_message(request: Request, bg_tasks: BackgroundTasks):
     payload = await request.json()
-    background_tasks.add_task(process_whatsapp_payload, payload)
+    bg_tasks.add_task(process_whatsapp_payload, payload)
     return {"status": "success"}
 
 async def process_whatsapp_payload(payload: dict):
@@ -71,12 +72,12 @@ async def process_whatsapp_payload(payload: dict):
                 "*Welcome to OppTrax Universal Agent!*\n\n"
                 "I am your autonomous web scouting companion. You can use these commands anytime:\n"
                 "- *list* - View all active scouts\n"
-                "- *stop <Task ID>* - Stop a scout\n"
+                "- *stop* - Stop a scout\n"
                 "- *help* - Show the command menu\n\n"
                 "*Examples of what I can track:*\n"
-                "- \"Notify me as soon as a new AI startup funding seed round gets announced.\"\n"
-                "- \"Track new VC seed rounds announced in SF.\"\n"
-                "- \"Notify when new projects get added to European Summer of Code with a summary.\"\n"
+                "- \"Notify me as soon as a new AI startup funding seed round gets announced.\"\n\n"
+                "- \"Track new VC seed rounds announced in SF.\"\n\n"
+                "- \"Notify when new projects get added to European Summer of Code with a summary.\"\n\n"
                 "- \"Track free tech conferences in Bengaluru.\"\n\n"
                 "*Would you like to enable personalized career matching?* "
                 "Uploading a resume allows me to filter and score internships/jobs against your skills."
@@ -203,7 +204,7 @@ async def process_whatsapp_payload(payload: dict):
                         else:
                             from services.ai_engine import enrich_findings_with_websearch
                             send_whatsapp_message(sender_phone, "[RESEARCH] Analyzing and researching findings...")
-                            summary = enrich_findings_with_websearch(findings_list[-5:])
+                            summary = await enrich_findings_with_websearch(findings_list[-5:])
                             send_whatsapp_message(sender_phone, summary)
                 elif button_id.startswith("stop_"):
                     target_id = button_id.replace("stop_", "")
@@ -248,7 +249,7 @@ async def process_whatsapp_payload(payload: dict):
                     raw_text = extract_text_from_pdf(file_path)
                     os.remove(file_path)
                     if raw_text:
-                        profile = build_user_profile(raw_text)
+                        profile = await build_user_profile(raw_text)
                         if profile:
                             await users_collection.update_one(
                                 {"whatsapp_phone": sender_phone},
@@ -352,13 +353,13 @@ async def process_whatsapp_payload(payload: dict):
                     
                     Format the response cleanly for a WhatsApp message. Keep it concise, use emojis sparingly, and avoid heavy markdown headers.
                     """
-                    res = gemini_client.models.generate_content(model=GATEKEEPER_MODEL, contents=draft_prompt)
+                    res = await generate_content_with_retry(model=GATEKEEPER_MODEL, contents=draft_prompt)
                     send_whatsapp_message(sender_phone, res.text)
                     return {"status": "success"}
 
                 rag_prompt = f"You are OppTrax AI Assistant. Your task is to comprehensively answer the user's question about the following scraped opportunity:\n{opp.get('raw_content', '')}\n\nCRITICAL INSTRUCTION: You MUST use Google Search to cross-reference this opportunity, find missing details (like exact stipends, deadlines, official links, or company reputation), and ensure your answer is fully up-to-date and accurate before replying.\nQuestion: {target_text}"
                 try:
-                    res = gemini_client.models.generate_content(
+                    res = await generate_content_with_retry(
                         model=GATEKEEPER_MODEL, 
                         contents=rag_prompt,
                         config=types.GenerateContentConfig(
@@ -367,7 +368,17 @@ async def process_whatsapp_payload(payload: dict):
                     )
                     send_whatsapp_message(sender_phone, f"{res.text}\n\n_[Type 'exit' to leave chat]_")
                 except Exception as e:
-                    send_whatsapp_message(sender_phone, "Sorry, I couldn't process your question right now.")
+                    print(f"[RAG] Search grounding failed: {e}. Falling back to standard generation...", flush=True)
+                    try:
+                        fallback_rag = f"You are OppTrax AI Assistant. Answer the user's question about the following scraped opportunity using the context provided:\n{opp.get('raw_content', '')}\n\nQuestion: {target_text}"
+                        res = await generate_content_with_retry(
+                            model=GATEKEEPER_MODEL,
+                            contents=fallback_rag
+                        )
+                        send_whatsapp_message(sender_phone, f"{res.text}\n\n_[Type 'exit' to leave chat]_")
+                    except Exception as fallback_err:
+                        print(f"[RAG] Fallback generation failed: {fallback_err}", flush=True)
+                        send_whatsapp_message(sender_phone, "Sorry, I couldn't process your question right now.")
             else:
                 await users_collection.update_one({"whatsapp_phone": sender_phone}, {"$set": {"chat_context_id": None}})
                 send_whatsapp_message(sender_phone, "Context lost. Left chat mode.")
@@ -433,7 +444,7 @@ async def process_whatsapp_payload(payload: dict):
         # =============================================================
         #  GATEKEEPER ROUTING
         # =============================================================
-        analysis = analyze_intent(target_text, user_profile)
+        analysis = await analyze_intent(target_text, user_profile)
         intent = analysis.get("intent")
         
         if analysis.get("reply"):

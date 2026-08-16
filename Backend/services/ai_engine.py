@@ -1,12 +1,12 @@
 import json
 from google.genai import types
-from config import gemini_client, GATEKEEPER_MODEL
+from config import gemini_client, GATEKEEPER_MODEL, generate_content_with_retry
 
 # =====================================================================
 #  DUAL-ROUTING GATEKEEPER ENGINE
 # =====================================================================
 
-def analyze_intent(raw_text: str, user_profile: dict = None) -> dict:
+async def analyze_intent(raw_text: str, user_profile: dict = None) -> dict:
     print(f"[GATEKEEPER] Analyzing raw intent: {raw_text[:50]}...", flush=True)
     profile_context = f"\nUser Profile Data Matrix: {user_profile}" if user_profile else "\nUser Profile Status: Anonymous"
     
@@ -41,7 +41,7 @@ def analyze_intent(raw_text: str, user_profile: dict = None) -> dict:
     }}
     """
     try:
-        response = gemini_client.models.generate_content(
+        response = await generate_content_with_retry(
             model=GATEKEEPER_MODEL, 
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json")
@@ -51,7 +51,7 @@ def analyze_intent(raw_text: str, user_profile: dict = None) -> dict:
         print(f"[GATEKEEPER] Error: {e}", flush=True)
         return {"intent": "INVALID", "reply": "My routing engine encountered an anomaly. Please try again."}
 
-def build_user_profile(raw_text: str):
+async def build_user_profile(raw_text: str):
     prompt = f"""You are an expert tech recruiter and career counselor. Analyze this resume text and extract comprehensive profile information into JSON format.
     Extract EVERYTHING relevant to build a deep, personalized profile matrix.
     
@@ -69,7 +69,7 @@ def build_user_profile(raw_text: str):
         "summary": "A comprehensive 3-4 sentence professional overview of their technical strengths, background, and specific domain expertise."
     }}"""
     try:
-        res = gemini_client.models.generate_content(
+        res = await generate_content_with_retry(
             model=GATEKEEPER_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json")
@@ -79,7 +79,7 @@ def build_user_profile(raw_text: str):
         print(f"Error building user profile: {e}")
         return None
 
-def enrich_findings_with_websearch(findings_list: list) -> str:
+async def enrich_findings_with_websearch(findings_list: list) -> str:
     if not findings_list:
         return "No findings to enrich."
     
@@ -101,7 +101,8 @@ def enrich_findings_with_websearch(findings_list: list) -> str:
     Deliver the final WhatsApp-ready message directly.
     """
     try:
-        res = gemini_client.models.generate_content(
+        # First attempt: Try with Google Search Grounding
+        res = await generate_content_with_retry(
             model=GATEKEEPER_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -110,5 +111,24 @@ def enrich_findings_with_websearch(findings_list: list) -> str:
         )
         return res.text.strip()
     except Exception as e:
-        print(f"Error enriching findings: {e}", flush=True)
-        return "Error enriching findings. Fallback raw data:\n\n" + findings_context
+        print(f"[AI ENGINE] Search grounding failed: {e}. Falling back to standard generation...", flush=True)
+        # Fallback: Try without Google Search tool
+        fallback_prompt = f"""
+        You are OppTrax, an elite autonomous research agent. 
+        I have just scraped the following raw findings from the web:
+        {findings_context}
+        
+        Synthesize these raw findings into a clean, highly readable summary.
+        MUST INCLUDE: You must provide the URL link for every single finding from the raw text so the user can apply.
+        Formatting: Format your final response entirely for WhatsApp (use *bold* for headings, • for bullets). Do not use markdown headers (#) or HTML.
+        CRITICAL: NEVER include conversational filler. Start immediately with the first bullet point.
+        """
+        try:
+            res = await generate_content_with_retry(
+                model=GATEKEEPER_MODEL,
+                contents=fallback_prompt
+            )
+            return res.text.strip()
+        except Exception as fallback_err:
+            print(f"[AI ENGINE] Fallback generation failed: {fallback_err}", flush=True)
+            return "Error enriching findings. Fallback raw data:\n\n" + findings_context
