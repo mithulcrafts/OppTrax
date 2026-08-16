@@ -8,3 +8,4 @@ motor
 dnspython
 google-genai
 python-dotenv
+tenacity

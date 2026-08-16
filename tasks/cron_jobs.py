@@ -61,7 +61,6 @@ async def yutori_polling_loop():
     
     from database import tasks_collection
     from services.yutori_client import fetch_yutori_updates
-    from routers.yutori_webhook import process_yutori_payload
 
     while True:
         try:
@@ -96,14 +95,12 @@ async def yutori_polling_loop():
                                 "findings": content,
                                 "id": update_id
                             }
-                            # Push it through the existing processing pipeline
-                            result = await process_yutori_payload(payload)
+                            # Process the finding directly
+                            from routers.yutori_webhook import process_yutori_payload
+                            await process_yutori_payload(payload)
                             
-                            if result.get("status") == "processed" and result.get("processed_count", 0) > 0:
-                                print(f"[POLLER] New finding(s) delivered for task {task_id[:8]}...", flush=True)
-                            
-                            # Throttle processing to protect Gemini API rate limits (15 RPM free tier)
-                            await asyncio.sleep(5)
+                            # Brief throttle to avoid spiking the queue size instantly
+                            await asyncio.sleep(0.5)
                             
                         except Exception as update_err:
                             print(f"[POLLER] Error processing single update for task {task_id[:8]}...: {update_err}", flush=True)

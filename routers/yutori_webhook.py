@@ -5,7 +5,7 @@ import traceback
 import asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request, BackgroundTasks
-from config import gemini_client, GATEKEEPER_MODEL
+from config import GATEKEEPER_MODEL, generate_content_with_retry
 from database import tasks_collection, users_collection, opportunities_collection
 from services.whatsapp_api import send_opportunity_card
 from google.genai import types
@@ -17,10 +17,46 @@ router = APIRouter()
 # =====================================================================
 
 @router.post("/yutori-webhook")
-async def receive_yutori_findings(request: Request, background_tasks: BackgroundTasks):
+async def receive_yutori_findings(request: Request, bg_tasks: BackgroundTasks):
     data = await request.json()
-    background_tasks.add_task(process_yutori_payload, data)
+    bg_tasks.add_task(process_yutori_payload, data)
     return {"status": "success"}
+
+def is_valid_opportunity(title: str, summary: str, url: str) -> bool:
+    title_lower = title.lower()
+    summary_lower = summary.lower()
+    url_lower = url.lower()
+    
+    # 1. Check for invalid or missing URLs
+    if not url.startswith("http"):
+        return False
+    
+    invalid_url_patterns = [
+        "n/a", "null", "none", "link-if-available", "example.com", 
+        "placeholder", "your-link", "link_here", "url_here", "google.com/search"
+    ]
+    if any(pat in url_lower for pat in invalid_url_patterns):
+        return False
+        
+    # 2. Check for empty/no opportunity findings
+    empty_phrases = [
+        "no opportunities", "no upcoming", "no active", "no listings", 
+        "no jobs", "no internships", "no hackathons", "not found", 
+        "no match", "none found", "zero opportunities", "no results",
+        "no postings", "not available", "no matching", "no new updates"
+    ]
+    if any(phrase in title_lower for phrase in empty_phrases):
+        return False
+    if any(phrase in summary_lower for phrase in empty_phrases):
+        # If the summary is short and indicates no findings, reject it
+        if len(summary) < 200:
+            return False
+            
+    # 3. Check for placeholder titles/summaries
+    if title_lower in ["new update", "placeholder", "untitled", "test"]:
+        return False
+        
+    return True
 
 async def process_yutori_payload(data: dict):
     """
@@ -47,6 +83,19 @@ async def process_yutori_payload(data: dict):
         if not task:
             return {"status": "no_active_task"}
             
+        # ── PRE-GEMINI DEDUPLICATION ─────────────────────────────
+        # Hash the raw findings and check if we already processed this exact payload
+        raw_hash = hashlib.md5(raw_findings.encode("utf-8")).hexdigest()[:15]
+        if raw_hash in task.get("processed_raw_hashes", []):
+            print(f"[POLLER] Raw finding hash {raw_hash} already processed, skipping Gemini call.", flush=True)
+            return {"status": "skipped_duplicate_raw"}
+            
+        # Lock this hash immediately so concurrent polls don't process it either
+        await tasks_collection.update_one(
+            {"yutori_task_id": task_id},
+            {"$addToSet": {"processed_raw_hashes": raw_hash}}
+        )
+            
         target_phone = task["whatsapp_number"]
         task_type = task.get("task_type", "GENERAL")
         
@@ -71,6 +120,8 @@ async def process_yutori_payload(data: dict):
         - If Task Type is "CAREER" and user profile is not empty, evaluate semantic relevance (0.0 to 1.0) against this profile: {profile_context}
         - Otherwise (GENERAL or empty profile), set semantic_relevance to null and reasoning to null.
         - Extract any application closing date or deadline and format it as ISO 8601 string (e.g., "2026-07-21T00:00:00Z"). If no explicit deadline is found, set deadline_iso to null.
+        - CRITICAL RULE: If no valid opportunities are found in the text, return an EMPTY LIST []. Do NOT return placeholder items, "no opportunities found" messages, or hallucinated events.
+        - CRITICAL RULE: Only include opportunities that have a valid, clickable application or info URL. Do NOT include items with "N/A" or missing links.
         
         Return a STRICT JSON list of objects:
         [
@@ -86,7 +137,7 @@ async def process_yutori_payload(data: dict):
         ]
         """
         try:
-            res = gemini_client.models.generate_content(
+            res = await generate_content_with_retry(
                 model=GATEKEEPER_MODEL, 
                 contents=parse_prompt, 
                 config=types.GenerateContentConfig(response_mime_type="application/json")
@@ -100,15 +151,7 @@ async def process_yutori_payload(data: dict):
                 raise ValueError("Parsed output is not a list")
         except Exception as gemini_err:
             print(f"[POLLER] Gemini parse failed for task {task_id[:8]}: {gemini_err}", flush=True)
-            # Fallback to single finding summary
-            parsed_list = [{
-                "title": "New Update",
-                "summary": raw_findings[:150],
-                "url": "N/A",
-                "deadline_iso": None,
-                "semantic_relevance": 0.5,
-                "reasoning": "Fallback parsing configuration implemented."
-            }]
+            return {"status": "error_parsing"}
 
         # ── DEDUPLICATION: Check DB directly for each finding ─────────
         # We query the opportunities_collection directly instead of relying
@@ -123,6 +166,10 @@ async def process_yutori_payload(data: dict):
             title_str = str(parsed.get("title") or "New Update").strip()
             url_str = str(parsed.get("url") or "N/A").strip()
             summary_str = str(parsed.get("summary") or "").strip()
+            
+            if not is_valid_opportunity(title_str, summary_str, url_str):
+                print(f"[POLLER] Skipping invalid or empty opportunity: {title_str} | URL: {url_str}", flush=True)
+                continue
             
             # Generate deterministic ID: hash of task_id + normalized(title + url)
             # Normalize to lowercase to prevent Gemini casing differences from creating duplicates
