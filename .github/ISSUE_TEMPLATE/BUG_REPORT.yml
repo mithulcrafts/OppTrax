@@ -1,17 +1,11 @@
 name: Bug Report
 description: Report a bug or unexpected behavior
 title: "bug: "
-labels:
-  - bug
+labels: [bug]
 
 body:
   - type: markdown
-    attributes:
-      value: |
-        Please fill out the details below for reporting the bug.
-
-  - type: textarea
-    id: bug_description
+    id: description
     attributes:
       label: Bug Description
       description: Clearly describe the issue.
@@ -35,8 +29,7 @@ body:
     id: expected
     attributes:
       label: Expected Behavior
-      description: What should happen?
-      placeholder: Describe the expected result.
+      placeholder: What should happen?
     validations:
       required: true
 
@@ -44,8 +37,7 @@ body:
     id: actual
     attributes:
       label: Actual Behavior
-      description: What actually happened?
-      placeholder: Describe the actual result.
+      placeholder: What actually happened?
     validations:
       required: true
 
@@ -53,12 +45,10 @@ body:
     id: screenshots
     attributes:
       label: Screenshots / Logs
-      description: Add screenshots, logs, or error messages if available.
-      placeholder: Paste logs or drag screenshots here.
+      description: Add screenshots or error logs if available.
 
   - type: textarea
     id: notes
     attributes:
       label: Additional Notes
-      description: Any extra information that might help investigate the issue.
-      placeholder: Additional context...
+      description: Any extra information.

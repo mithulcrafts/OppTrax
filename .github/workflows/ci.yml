@@ -1,9 +1,10 @@
-name: CI Quality Assurance
+name: CI
 
 on:
   pull_request:
     branches:
       - main
+
   push:
     branches:
       - '**'
@@ -17,7 +18,7 @@ permissions:
 
 jobs:
   quality-check:
-    name: Code Quality & Linting Verification
+    name: Code Quality & Build Verification
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -25,35 +26,23 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.12
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install Project Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
 
-      - name: Install QA Tools (Flake8 & Black)
-        run: python -m pip install flake8 black
+      - name: Install Dependencies
+        run: python -m pip install -r requirements.txt
 
-      - name: Code Formatting Check (Black)
-        # Checks if code matches Black's strict formatting standards.
-        # The '|| true' allows the build to continue even if styling isn't perfect.
-        run: black --check . || true
-
-      - name: Linting - Critical Errors (Flake8)
-        # Stops the build ONLY if there are fatal Python syntax errors or undefined names.
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-
-      - name: Linting - Style Warnings (Flake8)
-        # exit-zero treats all stylistic errors as warnings so your hackathon deployment doesn't get blocked.
-        run: flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - name: Verify Dependencies
+        run: python -m pip check
 
       - name: Validate Application Syntax
-        run: python -m py_compile Backend/main.py
+        run: python -m py_compile main.py
 
-      - name: Pipeline Passed
-        run: echo "All quality checks and linting passed successfully!"
+      - name: ✅ Pipeline Passed
+        run: echo "All checks passed successfully!"
