@@ -5,7 +5,7 @@ import base64
 from datetime import datetime
 import re
 import html
-from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID, SARVAM_KEY, WHATSAPP_OTP_TEMPLATE_NAME
+from config import WHATSAPP_TOKEN, PHONE_NUMBER_ID, SARVAM_KEY
 
 def _post_whatsapp(data: dict):
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -14,16 +14,8 @@ def _post_whatsapp(data: dict):
         res = requests.post(url, headers=headers, json=data, timeout=10)
         if res.status_code >= 400:
             print(f"WhatsApp API Error {res.status_code}: {res.text}", flush=True)
-            try:
-                res_json = res.json()
-                error_msg = res_json.get("error", {}).get("message", "Unknown Meta API error")
-                error_code = res_json.get("error", {}).get("code", 0)
-                raise Exception(f"Meta API Error {error_code}: {error_msg}")
-            except ValueError:
-                raise Exception(f"Meta API Error Status {res.status_code}: {res.text}")
-    except requests.RequestException as e:
-        print(f"WhatsApp network error: {e}", flush=True)
-        raise Exception(f"WhatsApp Network Error: {e}")
+    except Exception as e:
+        print(f"WhatsApp send error: {e}", flush=True)
 
 def format_html_for_whatsapp(raw_html: str) -> str:
     if not raw_html: return ""
@@ -116,20 +108,26 @@ def send_action_buttons(to_phone: str, task_id: str, instruction: str, finding_c
 
 def send_opportunity_card(to_phone: str, finding_id: str, title: str, summary: str, url: str, task_type: str, priority_score: float = None, reasoning: str = None, deadline: str = None):
     """Generates the clean interactive UI card for showing findings to the user."""
-    card_text = f"*New Opportunity Found!*\n\n"
-    card_text += f"*Title:* {title}\n"
-    card_text += f"*Summary:* {summary}\n"
+    card_text_header = f"*New Opportunity Found!*\n\n*{title}*\n\n"
     
+    card_text_footer = ""
     if deadline and str(deadline).strip().lower() not in ["null", "none", "n/a", ""]:
         # Try to format date nicely if it's in ISO format
         try:
             dt = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
             formatted_date = dt.strftime("%B %d, %Y")
-            card_text += f"*Deadline:* {formatted_date}\n"
+            card_text_footer += f"*Deadline:* {formatted_date}\n\n"
         except:
-            card_text += f"*Deadline:* {deadline}\n"
+            card_text_footer += f"*Deadline:* {deadline}\n\n"
             
-    card_text += f"\n*Link:* {url}"
+    card_text_footer += f"*Link:* {url}"
+    
+    # WhatsApp interactive body text has a strict 1024 character limit
+    max_summary_len = 1024 - len(card_text_header) - len(card_text_footer) - 5
+    if len(summary) > max_summary_len:
+        summary = summary[:max_summary_len-3] + "..."
+        
+    card_text = f"{card_text_header}{summary}\n\n{card_text_footer}"
 
     buttons = [
         {"type": "reply", "reply": {"id": f"track_{finding_id}", "title": "Save to Board"}},
@@ -200,36 +198,3 @@ def send_whatsapp_audio(to_phone: str, media_id: str):
         "type": "audio",
         "audio": {"id": media_id}
     })
-
-def send_otp_message(to_phone: str, otp_code: str):
-    """Sends OTP code via template if configured, otherwise falls back to a text message."""
-    if WHATSAPP_OTP_TEMPLATE_NAME:
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": WHATSAPP_OTP_TEMPLATE_NAME,
-                "language": {
-                    "code": "en_US"
-                },
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {
-                                "type": "text",
-                                "text": otp_code
-                            }
-                        ]
-                    }
-                ]
-            }
-        }
-        _post_whatsapp(payload)
-    else:
-        # Fallback to standard text message
-        msg_text = f"Your OppTrax verification code is: *{otp_code}*\n\nIt is valid for 5 minutes. Enter this code on the website to complete your onboarding."
-        send_whatsapp_message(to_phone, msg_text)
-

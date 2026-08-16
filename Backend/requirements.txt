@@ -4,3 +4,8 @@ requests==2.34.2
 sarvamai==0.1.28
 pinggy==0.2.0
 pymupdf==1.27.2.3
+motor
+dnspython
+google-genai
+python-dotenv
+tenacity
