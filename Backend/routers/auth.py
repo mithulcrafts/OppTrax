@@ -172,18 +172,24 @@ async def send_otp(req: SendOTPRequest):
                 "status": "sandbox_error",
                 "message": (
                     "Meta Sandbox Restriction: This phone number is not registered "
-                    "in the Meta Developer Console's allowed recipient list."
+                    "in the Meta Developer Console's allowed recipient list. "
+                    f"Use OTP: {otp} to enter manually."
                 ),
                 "detail": "allowed_list_error",
                 "phone": sanitized_phone,
+                "dev_otp": otp,
                 "whatsapp_deep_link": get_whatsapp_connect_link(f"Hi OppTrax! My code is {otp}"),
             }
         return {
             "status": "sandbox_error",
-            "message": f"WhatsApp API Error: {error_str}",
+            "message": (
+                "WhatsApp Cloud API Error: Meta Phone Number ID is invalid or missing permissions. "
+                f"For local demo testing, your verification code is: {otp}"
+            ),
             "detail": "api_error",
             "phone": sanitized_phone,
-            "whatsapp_deep_link": get_whatsapp_connect_link(),
+            "dev_otp": otp,
+            "whatsapp_deep_link": get_whatsapp_connect_link(f"VERIFY {otp}"),
         }
 
 

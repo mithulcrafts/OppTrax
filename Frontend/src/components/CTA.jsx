@@ -54,6 +54,10 @@ export default function CTA({ onAuthenticated }) {
         setDeepLink(data.whatsapp_deep_link);
       }
 
+      if (data.dev_otp) {
+        setOtp(data.dev_otp);
+      }
+
       if (data.status === 'sandbox_error' || data.status === 'sandbox_mode') {
         setWarning(data.message);
       }
