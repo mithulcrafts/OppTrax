@@ -10,13 +10,21 @@ export default function ProfileTab({ user, opportunities, onUpdated, onNotify, o
   const [rawBio, setRawBio] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const syncFormFromProfile = (p) => {
+    if (!p) return;
+    setSkillsText((p.skills || []).join(', '));
+    setRolesText((p.target_roles || []).join(', '));
+    setLocationsText((p.preferred_locations || []).join(', '));
+    setSummaryText(p.summary || '');
+  };
+
   const trackedOpps = (opportunities || []).filter((o) => o.is_tracked);
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await apiRequest('/api/user/profile', {
+      const data = await apiRequest('/api/user/profile', {
         method: 'PUT',
         body: JSON.stringify({
           skills: skillsText.split(',').map((s) => s.trim()).filter(Boolean),
@@ -26,6 +34,7 @@ export default function ProfileTab({ user, opportunities, onUpdated, onNotify, o
           raw_resume_text: rawBio.trim() || undefined,
         }),
       });
+      syncFormFromProfile(data?.profile_json);
       setRawBio('');
       onNotify('Personalized profile saved! Future LiveScout searches & scores will tailor to your profile.');
       await onUpdated();
@@ -37,19 +46,22 @@ export default function ProfileTab({ user, opportunities, onUpdated, onNotify, o
   };
 
   const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
     setSaving(true);
     try {
       const form = new FormData();
       form.append('file', file);
       form.append('notify_whatsapp', 'true');
-      await apiRequest('/api/user/resume', { method: 'POST', body: form });
+      const data = await apiRequest('/api/user/resume', { method: 'POST', body: form });
+      syncFormFromProfile(data?.profile_json);
       onNotify('Resume parsed and synced to WhatsApp profile!');
       await onUpdated();
     } catch (err) {
       onNotify(err.message, true);
     } finally {
+      input.value = '';
       setSaving(false);
     }
   };

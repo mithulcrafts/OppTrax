@@ -29,11 +29,32 @@ def _strip_json_fences(raw_text: str) -> str:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
+    elif "```" in text:
+        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+        if fenced:
+            return fenced.group(1).strip()
     return text.strip()
 
 
 def _safe_json_loads(raw_text: str) -> Any:
     cleaned = _strip_json_fences(raw_text)
+    cleaned_no_trailing_commas = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    for candidate in (cleaned, cleaned_no_trailing_commas):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    decoder = json.JSONDecoder()
+    starts = [idx for ch in ("{", "[") if (idx := cleaned.find(ch)) != -1]
+    if starts:
+        snippet = cleaned[min(starts):]
+        for attempt in (snippet, re.sub(r",\s*([}\]])", r"\1", snippet)):
+            try:
+                parsed, _ = decoder.raw_decode(attempt)
+                return parsed
+            except json.JSONDecodeError:
+                pass
     return json.loads(cleaned)
 
 
@@ -252,69 +273,151 @@ Return STRICT JSON:
     return _heuristic_intent_fallback(raw_text, user_profile, learned_preferences)
 
 
+_KNOWN_PROFILE_SKILLS = [
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "React",
+    "Next.js",
+    "Node.js",
+    "FastAPI",
+    "Django",
+    "Flask",
+    "Java",
+    "C++",
+    "C",
+    "Go",
+    "Rust",
+    "SQL",
+    "PostgreSQL",
+    "MySQL",
+    "MongoDB",
+    "Redis",
+    "AWS",
+    "GCP",
+    "Azure",
+    "Docker",
+    "Kubernetes",
+    "Git",
+    "Linux",
+    "Tailwind CSS",
+    "HTML",
+    "CSS",
+    "Machine Learning",
+    "Deep Learning",
+    "AI",
+    "NLP",
+    "PyTorch",
+    "TensorFlow",
+    "Data Science",
+    "Figma",
+]
+
+
+def _heuristic_profile_fallback(raw_text: str) -> dict[str, Any]:
+    """Deterministic fallback extractor when LLM output is unavailable or malformed."""
+    compact_text = re.sub(r"\s+", " ", raw_text).strip()
+    lowered = compact_text.lower()
+    known_skills = []
+    for skill in _KNOWN_PROFILE_SKILLS:
+        pattern = rf"(?<![a-z0-9]){re.escape(skill.lower())}(?![a-z0-9])"
+        if re.search(pattern, lowered):
+            known_skills.append(skill)
+
+    words = [w.strip(",.()[]{}:;") for w in compact_text.split() if len(w.strip(",.()[]{}:;")) > 2]
+    exp_level = "Junior"
+    if any(k in lowered for k in ("b.tech", "b.e", "bachelor", "undergraduate", "student", "university", "college", "semester")):
+        exp_level = "Student"
+    elif any(k in lowered for k in ("senior", "lead", "5+ years", "6+ years")):
+        exp_level = "Senior"
+
+    locations = [loc for loc in ("India", "Bengaluru", "Hyderabad", "Pune", "Mumbai", "Delhi", "Chennai", "Remote") if loc.lower() in lowered]
+    if "Remote" not in locations:
+        locations.append("Remote")
+    if "India" not in locations:
+        locations.append("India")
+
+    role_candidates = [
+        ("Software Engineering Intern", ("software", "developer", "engineering", "full stack", "backend", "frontend")),
+        ("AI / ML Engineer", ("ai", "machine learning", "deep learning", "nlp", "data science")),
+        ("Hackathon Builder", ("hackathon", "prototype", "open source")),
+    ]
+    target_roles = [role for role, cues in role_candidates if any(cue in lowered for cue in cues)] or [
+        "Internships",
+        "Hackathons",
+        "Full-Time Roles",
+    ]
+
+    return {
+        "skills": known_skills or words[:8],
+        "experience_level": exp_level,
+        "education": [],
+        "experience": [],
+        "project_themes": known_skills[:4],
+        "interests": known_skills[:4] or ["Software Engineering"],
+        "preferred_locations": locations,
+        "target_roles": target_roles,
+        "summary": compact_text[:400],
+    }
+
+
+def _coerce_str_list(value: Any, limit: int = 15) -> list[str]:
+    if isinstance(value, str):
+        items = [part.strip() for part in value.split(",") if part.strip()]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        items = []
+    return items[:limit]
+
+
+def _normalize_profile_dict(parsed: dict[str, Any], raw_text: str) -> dict[str, Any]:
+    fallback = _heuristic_profile_fallback(raw_text)
+    return {
+        "skills": _coerce_str_list(parsed.get("skills"), 20) or fallback["skills"],
+        "experience_level": str(parsed.get("experience_level") or fallback["experience_level"]).strip() or fallback["experience_level"],
+        "education": _coerce_str_list(parsed.get("education"), 8),
+        "experience": _coerce_str_list(parsed.get("experience"), 8),
+        "project_themes": _coerce_str_list(parsed.get("project_themes"), 10) or fallback["project_themes"],
+        "interests": _coerce_str_list(parsed.get("interests"), 10) or fallback["interests"],
+        "preferred_locations": _coerce_str_list(parsed.get("preferred_locations"), 10) or fallback["preferred_locations"],
+        "target_roles": _coerce_str_list(parsed.get("target_roles"), 10) or fallback["target_roles"],
+        "summary": str(parsed.get("summary") or fallback["summary"]).strip()[:600],
+    }
+
+
 async def build_user_profile(raw_text: str) -> dict[str, Any] | None:
     if not raw_text or not raw_text.strip():
         return None
     if not gemini_client:
-        words = [w.strip(",.()[]") for w in raw_text.split() if len(w) > 2]
-        known_skills = [
-            s
-            for s in [
-                "Python",
-                "JavaScript",
-                "TypeScript",
-                "React",
-                "Node.js",
-                "FastAPI",
-                "Java",
-                "C++",
-                "SQL",
-                "MongoDB",
-                "AWS",
-                "Docker",
-                "Machine Learning",
-                "AI",
-            ]
-            if s.lower() in raw_text.lower()
-        ]
-        return {
-            "skills": known_skills or words[:8],
-            "experience_level": "Student/Junior",
-            "education": [],
-            "experience": [],
-            "project_themes": [],
-            "interests": known_skills[:4] or ["Software Engineering"],
-            "preferred_locations": ["Remote", "India"],
-            "target_roles": ["Internships", "Hackathons", "Full-Time Roles"],
-            "summary": raw_text[:400],
-        }
+        return _heuristic_profile_fallback(raw_text)
 
     prompt = f"""Analyze this resume/profile text and extract structured career profile data.
 
 Text:
-{raw_text[:12000]}
+{raw_text[:10000]}
 
-Return STRICT JSON:
+Return STRICT compact JSON only (no markdown fences, max 15 skills, max 5 items per other list, concise summary <= 3 sentences):
 {{
   "skills": ["Python", "React", "FastAPI"],
   "experience_level": "Student | Junior | Mid | Senior",
   "education": ["Degree & Institution"],
-  "experience": ["Role at Company - summary"],
+  "experience": ["Role at Company - concise summary"],
   "project_themes": ["AI/ML", "Full Stack"],
   "interests": ["Internships", "Backend", "AI"],
   "preferred_locations": ["Remote", "Bengaluru", "India"],
   "target_roles": ["Software Engineering Intern", "AI Engineer"],
-  "summary": "3-4 sentence professional overview."
+  "summary": "2-3 sentence professional overview."
 }}"""
-    text, _ = await _ai_generate_text(prompt, json_mode=True, max_tokens=700)
+    text, _ = await _ai_generate_text(prompt, json_mode=True, max_tokens=2000)
     if text:
         try:
             parsed = _safe_json_loads(text)
             if isinstance(parsed, dict):
-                return parsed
+                return _normalize_profile_dict(parsed, raw_text)
         except Exception as exc:
-            print(f"[PROFILE] Error parsing profile JSON: {exc}", flush=True)
-    return None
+            print(f"[PROFILE] Error parsing profile JSON ({exc}); using deterministic fallback.", flush=True)
+    return _heuristic_profile_fallback(raw_text)
 
 
 def _fallback_parse_raw_findings(
