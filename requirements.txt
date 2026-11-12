@@ -9,3 +9,7 @@ dnspython
 google-genai
 python-dotenv
 tenacity
+python-multipart
+httpx
+pytest
+pytest-asyncio

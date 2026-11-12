@@ -23,7 +23,7 @@ export default function useIntersectionObserver() {
       elements.forEach((el) => {
         try {
           revealObs.unobserve(el);
-        } catch (err) {
+        } catch {
           // Element might not exist anymore
         }
       });

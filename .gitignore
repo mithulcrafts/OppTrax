@@ -1,1 +1,21 @@
-.vscode
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environment & Secrets
+.env
+Backend/.env
+Backend/data/
+
+# Node / Frontend
+Frontend/node_modules/
+Frontend/dist/
+
+# Binaries / OS
+ngrok.exe
+Backend/ngrok.exe
+.DS_Store
+Thumbs.db

@@ -1,18 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { apiRequest, setStoredSessionToken } from '../lib/api';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const LANG_OPTIONS = [
+  { id: 'both', label: 'EN + हिंदी (Both)' },
+  { id: 'en', label: 'English' },
+  { id: 'hi', label: 'हिंदी (Hindi)' },
+];
 
-export default function CTA() {
+export default function CTA({ onAuthenticated }) {
   const [step, setStep] = useState('phone'); // 'phone' | 'otp' | 'success'
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
+  const [preferredLanguage, setPreferredLanguage] = useState('both');
+  const [deepLink, setDeepLink] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
   const [resendCountdown, setResendCountdown] = useState(0);
   const timerRef = useRef(null);
 
-  // Countdown timer logic for OTP resend
   useEffect(() => {
     if (resendCountdown > 0) {
       timerRef.current = setTimeout(() => {
@@ -39,30 +45,20 @@ export default function CTA() {
     setWarning('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/send-otp`, {
+      const data = await apiRequest('/api/auth/send-otp', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ phone: cleanPhone }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Failed to send OTP. Please try again.');
+      if (data.whatsapp_deep_link) {
+        setDeepLink(data.whatsapp_deep_link);
       }
 
-      if (data.status === 'sandbox_error') {
-        // WhatsApp API failed because the number isn't in Sandbox Allowed List,
-        // but we transition so they can enter OTP from debug console log
+      if (data.status === 'sandbox_error' || data.status === 'sandbox_mode') {
         setWarning(data.message);
-        setStep('otp');
-        setResendCountdown(30);
-      } else {
-        setStep('otp');
-        setResendCountdown(30); // 30-second cooldown
       }
+      setStep('otp');
+      setResendCountdown(30);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -82,25 +78,24 @@ export default function CTA() {
     setError('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/verify-otp`, {
+      const data = await apiRequest('/api/auth/verify-otp', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           phone: phone.trim(),
           otp: cleanOtp,
+          preferred_language: preferredLanguage,
         }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Invalid OTP code. Please check and try again.');
+      setStoredSessionToken(data.session_token);
+      if (data.whatsapp_deep_link) {
+        setDeepLink(data.whatsapp_deep_link);
       }
-
       setStep('success');
       setWarning('');
+      if (onAuthenticated) {
+        onAuthenticated(data.session_token, data.user, data.whatsapp_deep_link);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -121,23 +116,44 @@ export default function CTA() {
   };
 
   return (
-    <section className="cta-section">
-      {/* Component Styles */}
+    <section className="cta-section" id="connect">
       <style>{`
         .cta-section {
           position: relative;
           z-index: 1;
         }
         .cta-card {
-          max-width: 460px;
+          max-width: 480px;
           margin: 0 auto;
           background: rgba(255, 255, 255, 0.015);
-          border: 1px solid rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.08);
           border-radius: 16px;
-          padding: 3rem 2.5rem;
+          padding: 2.75rem 2.25rem;
           backdrop-filter: blur(8px);
           -webkit-backdrop-filter: blur(8px);
           box-shadow: 0 24px 60px -15px rgba(0, 0, 0, 0.7);
+        }
+        .lang-pills {
+          display: flex;
+          gap: 8px;
+          justify-content: center;
+          flex-wrap: wrap;
+          margin-bottom: 1rem;
+        }
+        .lang-pill {
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          color: rgba(255, 255, 255, 0.68);
+          padding: 7px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .lang-pill.active {
+          background: rgba(0, 168, 132, 0.18);
+          border-color: #00a884;
+          color: #fff;
         }
         .otp-input-container {
           position: relative;
@@ -190,10 +206,10 @@ export default function CTA() {
           margin-bottom: 1.5rem;
           text-align: left;
           display: flex;
-          align-items: center;
-          gap: 8px;
+          flex-direction: column;
+          gap: 6px;
           animation: msgIn 0.3s ease both;
-          line-height: 1.4;
+          line-height: 1.45;
         }
         .spinner {
           display: inline-block;
@@ -205,10 +221,6 @@ export default function CTA() {
           animation: spin 0.8s linear infinite;
           vertical-align: middle;
           margin-right: 8px;
-        }
-        .spinner-white {
-          border-color: rgba(255, 255, 255, 0.2);
-          border-left-color: #fff;
         }
         @keyframes spin {
           to { transform: rotate(360deg); }
@@ -262,16 +274,29 @@ export default function CTA() {
       <div className="cta-card reveal visible">
         {step === 'phone' && (
           <form onSubmit={handleSendOTP}>
-            <h2 style={{ fontSize: '28px', marginBottom: '1rem', letterSpacing: '-0.5px' }}>
-              Verify on WhatsApp
+            <h2 style={{ fontSize: '28px', marginBottom: '0.75rem', letterSpacing: '-0.5px' }}>
+              Connect Your WhatsApp
             </h2>
-            <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '13.5px', marginBottom: '1.5rem', lineHeight: '1.5' }}>
-              Enter your WhatsApp number to receive a one-time verification password.
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13.5px', marginBottom: '1.25rem', lineHeight: '1.5' }}>
+              Verify once to launch personalized LiveScout feeds, bilingual EN/हिंदी alerts, deadline reminders &amp; AI Q&amp;A.
             </p>
+
+            <div className="lang-pills" aria-label="Preferred Alert Language">
+              {LANG_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className={`lang-pill ${preferredLanguage === opt.id ? 'active' : ''}`}
+                  onClick={() => setPreferredLanguage(opt.id)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
 
             {error && (
               <div className="error-banner">
-                <span>⚠️ {error}</span>
+                <span>{error}</span>
               </div>
             )}
 
@@ -302,30 +327,40 @@ export default function CTA() {
                 )}
               </button>
             </div>
-            <p className="cta-note" style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', marginTop: '1.25rem' }}>
-              Standard network rates may apply. Make sure to enter your country code (e.g. +91 for India).
+            <p className="cta-note" style={{ fontSize: '11px', color: 'rgba(255,255,255,0.32)', marginTop: '1.25rem' }}>
+              Enter country code (e.g. +91 for India). Works with live Meta/Twilio WhatsApp or local sandbox bridge.
             </p>
           </form>
         )}
 
         {step === 'otp' && (
           <form onSubmit={handleVerifyOTP}>
-            <h2 style={{ fontSize: '28px', marginBottom: '1rem', letterSpacing: '-0.5px' }}>
+            <h2 style={{ fontSize: '28px', marginBottom: '0.75rem', letterSpacing: '-0.5px' }}>
               Enter Verification Code
             </h2>
-            <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '13.5px', marginBottom: '1.5rem', lineHeight: '1.5' }}>
-              We've sent a 6-digit code to <strong>{phone}</strong> via WhatsApp.
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13.5px', marginBottom: '1.25rem', lineHeight: '1.5' }}>
+              Enter the 6-digit code generated for <strong>{phone}</strong>.
             </p>
 
             {warning && (
               <div className="warning-banner">
-                <span>⚠️ <strong>Sandbox Notice:</strong> OTP could not be sent to WhatsApp because this number is not registered in your Meta allowed test list. Retrieve the OTP code from your backend console log to continue testing.</span>
+                <span><strong>Sandbox / Console Mode:</strong> {warning}</span>
+                {deepLink && (
+                  <a
+                    href={deepLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: '#25D366', textDecoration: 'underline', fontWeight: 500 }}
+                  >
+                    Or tap here to verify via WhatsApp &rarr;
+                  </a>
+                )}
               </div>
             )}
 
             {error && (
               <div className="error-banner">
-                <span>⚠️ {error}</span>
+                <span>{error}</span>
               </div>
             )}
 
@@ -355,7 +390,7 @@ export default function CTA() {
                     Verifying...
                   </>
                 ) : (
-                  'Confirm & Activate'
+                  'Confirm & Activate Workspace'
                 )}
               </button>
             </div>
@@ -379,20 +414,33 @@ export default function CTA() {
 
         {step === 'success' && (
           <div style={{ textAlign: 'center' }}>
-            <div className="success-checkmark">✓</div>
-            <h2 style={{ fontSize: '28px', marginBottom: '1rem', letterSpacing: '-0.5px', color: '#fff' }}>
-              Onboarding Complete!
+            <div className="success-checkmark">&#10003;</div>
+            <h2 style={{ fontSize: '26px', marginBottom: '0.75rem', letterSpacing: '-0.5px', color: '#fff' }}>
+              WhatsApp Connected!
             </h2>
-            <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '14px', lineHeight: '1.6', marginBottom: '2rem' }}>
-              Your WhatsApp number has been verified. Check your phone—we've sent you a welcome message containing instructions to start tracking.
+            <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '14px', lineHeight: '1.6', marginBottom: '1.5rem' }}>
+              Your workspace and bilingual WhatsApp bot are now synchronized.
             </p>
-            <button
-              onClick={handleGoBack}
-              className="btn-ghost"
-              style={{ padding: '10px 24px', fontSize: '13.5px' }}
-            >
-              Verify another number
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {deepLink && (
+                <a
+                  href={deepLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-primary"
+                  style={{ display: 'inline-block', textDecoration: 'none', padding: '11px 20px' }}
+                >
+                  Open Chat in WhatsApp &rarr;
+                </a>
+              )}
+              <button
+                onClick={handleGoBack}
+                className="btn-ghost"
+                style={{ padding: '10px 24px', fontSize: '13.5px' }}
+              >
+                Verify another number
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -1,5 +1,3 @@
-import React from 'react';
-
 export default function Features() {
   return (
     <section className="section" id="features" style={{ paddingTop: 0, borderBottom: 'none' }}>

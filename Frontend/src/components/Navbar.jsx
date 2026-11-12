@@ -1,9 +1,17 @@
-import React from 'react';
-
-export default function Navbar() {
+export default function Navbar({ sessionUser, onOpenWorkspace, onLogout }) {
   const handleGetStarted = () => {
-    const el = document.getElementById('phone-cta');
-    if (el) el.focus();
+    if (sessionUser && onOpenWorkspace) {
+      onOpenWorkspace();
+      return;
+    }
+    const section = document.getElementById('connect');
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth' });
+    }
+    setTimeout(() => {
+      const el = document.getElementById('phone-cta');
+      if (el) el.focus();
+    }, 300);
   };
 
   return (
@@ -18,9 +26,20 @@ export default function Navbar() {
         <a className="nav-link" href="#how">
           How it works
         </a>
-        <button className="nav-cta" onClick={handleGetStarted}>
-          Get started
-        </button>
+        {sessionUser ? (
+          <>
+            <button className="nav-cta" onClick={handleGetStarted}>
+              Workspace &middot; +{sessionUser.whatsapp_phone}
+            </button>
+            <button className="nav-link nav-logout-btn" onClick={onLogout} type="button">
+              Disconnect
+            </button>
+          </>
+        ) : (
+          <button className="nav-cta" onClick={handleGetStarted}>
+            Get started
+          </button>
+        )}
       </div>
     </nav>
   );

@@ -34,9 +34,9 @@ A conversational onboarding questionnaire conducted entirely inside WhatsApp. Th
 OppTrax translates the user's structured profile metrics into targeted web search and scouting commands. It queries multiple web sources via automated headless scouters, then matches and ranks matching opportunities against the user's skill set.
 
 ### Technical Overview
-*   **Query Generation**: The intent analysis routine in the AI services layer matches candidate criteria against requests to formulate target queries.
-*   **Headless Crawling**: Managed by the crawler client module. The client invokes the scouting task endpoint, configuring target parameters, frequency timers, and the callback webhook URL `[NGROK_BASE_URL]/yutori-webhook`.
-*   **Ranking**: Matches are saved in the `opportunities` collection and scored based on semantic relevance against the candidate's parsed skills.
+*   **Query Generation**: The intent analysis routine parses English, Hindi, or Hinglish requests and candidate skills into structured LiveScout search tokens.
+*   **Live Multi-Source Discovery**: `services/live_scout.py` queries Unstop, Devpost, Remotive, Arbeitnow, and web RSS feeds concurrently, and continuous LiveScout background polls run on schedule.
+*   **Ranking**: Matches are scored against candidate skills and learned preferences, translated/enriched into Hindi via Sarvam AI, and stored in the `opportunities` store.
 
 ---
 

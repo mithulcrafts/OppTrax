@@ -1,119 +1,143 @@
 import asyncio
-import traceback
-from datetime import datetime, timezone, timedelta
-from database import tracked_collection, opportunities_collection
-from services.whatsapp_api import send_whatsapp_message
+import time
+from datetime import datetime, timezone
+from typing import Any
 
-# =====================================================================
-#  AUTONOMOUS DEADLINE REMINDER BACKGROUND LOOP
-# =====================================================================
+from config import DAILY_DIGEST_HOUR_UTC, REMINDER_CHECK_INTERVAL_SECONDS, YUTORI_POLL_INTERVAL_SECONDS
+from database import tasks_collection, users_collection
+from routers.yutori_webhook import normalize_yutori_payload, process_yutori_findings_batch
+from services.live_scout import search_live_opportunities
+from services.opportunity_service import run_deadline_reminder_sweep, save_and_notify_opportunity, send_daily_digest_for_user
+from services.yutori_client import fetch_yutori_updates, get_yutori_research_status
 
-async def deadline_reminder_loop():
-    """Runs in the background, checking DB for approaching deadlines to ping users."""
-    print("[SYSTEM] Background Reminder Loop Started!", flush=True)
+
+async def _poll_livescout_task(task: dict[str, Any]) -> int:
+    task_id = str(task.get("yutori_task_id") or "")
+    phone = str(task.get("whatsapp_phone") or "")
+    query = str(task.get("query_instruction") or "")
+    if not phone or not query:
+        return 0
+
+    user = await users_collection.find_one({"whatsapp_phone": phone}) or {}
+    live_res = await search_live_opportunities(
+        query_text=query,
+        user_profile=user.get("profile_json"),
+        learned_preferences=user.get("learned_preferences"),
+        limit=4,
+    )
+    items = live_res.get("items") or []
+    citations = live_res.get("citations") or []
+
+    saved_count = 0
+    for item in items:
+        doc = await save_and_notify_opportunity(
+            parsed=item,
+            owner_phone=phone,
+            raw_content=item.get("full_details_en", item.get("summary_en", "")),
+            task_id=task_id,
+            task_type=str(task.get("task_type") or "CAREER"),
+            citations=citations,
+            notify_whatsapp=True,
+        )
+        if doc:
+            saved_count += 1
+
+    await tasks_collection.update_one({"yutori_task_id": task_id}, {"$set": {"last_checked": time.time()}})
+    return saved_count
+
+
+async def poll_single_yutori_task(task: dict[str, Any]) -> int:
+    """Polls one active LiveScout or legacy remote scout/research task and processes new findings."""
+    task_id = str(task.get("yutori_task_id") or "")
+    if not task_id:
+        return 0
+    if task_id.startswith(("livescout_", "local_")):
+        if task.get("task_kind") == "research":
+            return 0
+        return await _poll_livescout_task(task)
+
+    task_kind = str(task.get("task_kind") or "scout")
+    payload = await (get_yutori_research_status(task_id) if task_kind == "research" else fetch_yutori_updates(task_id))
+    if not isinstance(payload, dict):
+        return 0
+
+    normalized = normalize_yutori_payload({**payload, "task_id": task_id})
+    status_lower = normalized["status"].lower()
+
+    if task_kind == "research" and status_lower in {"failed", "error", "cancelled"}:
+        await tasks_collection.update_one({"yutori_task_id": task_id}, {"$set": {"status": "FAILED"}})
+        return 0
+
+    saved_count = 0
+    if normalized["raw_text"]:
+        saved = await process_yutori_findings_batch(
+            task_doc=task,
+            raw_text=normalized["raw_text"],
+            citations=normalized["citations"],
+            notify_whatsapp=True,
+        )
+        saved_count = len(saved)
+
+    await tasks_collection.update_one(
+        {"yutori_task_id": task_id},
+        {"$set": {"last_checked": time.time()}},
+    )
+    return saved_count
+
+
+async def deadline_reminder_loop() -> None:
+    """Background loop checking tracked deadlines and sending tiered WhatsApp alerts."""
+    await asyncio.sleep(5)
     while True:
         try:
-            now = datetime.now(timezone.utc)
-            # Look ahead for deadlines happening in the next 24 to 48 hours
-            warning_window = now + timedelta(days=2)
-            
-            # Find tracked items where deadline exists, is approaching, and haven't been reminded
-            cursor = tracked_collection.find({
-                "deadline_iso": {"$ne": None, "$gte": now.isoformat(), "$lte": warning_window.isoformat()},
-                "reminded": {"$ne": True}
-            })
-            
-            async for track_item in cursor:
-                phone = track_item["whatsapp_phone"]
-                opp = await opportunities_collection.find_one({"_id": track_item["opportunity_id"]})
-                
-                if opp:
-                    msg = f"[ALERT] *OppTrax Deadline Reminder!*\n\nYour tracked opportunity *{opp.get('title')}* is closing soon!\n\nDon't forget to apply:\n{opp.get('url')}"
-                    send_whatsapp_message(phone, msg)
-                    
-                    # Mark as reminded so we don't spam them
-                    await tracked_collection.update_one({"_id": track_item["_id"]}, {"$set": {"reminded": True}})
-                    print(f"[SUCCESS] Reminder sent to {phone} for task {opp.get('title')}", flush=True)
-                    
-        except Exception as e:
-            print(f"Reminder Loop Error: {e}", flush=True)
-            
-        await asyncio.sleep(3600) # Wait 1 hour before checking again
+            sent = await run_deadline_reminder_sweep()
+            if sent:
+                print(f"[CRON REMINDERS] Sent {sent} deadline reminder(s).", flush=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[CRON REMINDERS ERROR] {exc}", flush=True)
+        await asyncio.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
 
-# =====================================================================
-#  AUTONOMOUS YUTORI POLLING LOOP
-# =====================================================================
 
-async def yutori_polling_loop():
-    """Runs in the background, polling Yutori for updates on active tasks.
-    
-    Architecture:
-    - Runs every 3 minutes
-    - For each active task, pulls the latest updates from Yutori's API
-    - Feeds each update through the same pipeline as the webhook handler
-    - Deduplication is handled inside process_yutori_payload (idempotent)
-    - Errors on one task do NOT prevent processing of other tasks
-    """
-    print("[SYSTEM] Autonomous Yutori Polling Loop Started!", flush=True)
-    
-    # Delay first poll by 15 seconds to let the server fully boot
-    await asyncio.sleep(15)
-    
-    from database import tasks_collection
-    from services.yutori_client import fetch_yutori_updates
-
+async def yutori_polling_loop() -> None:
+    """Background loop polling Yutori Scouting and Research APIs as webhook fallback."""
+    await asyncio.sleep(10)
     while True:
         try:
-            # Query all active tasks
-            active_tasks = await tasks_collection.find({"status": "active"}).to_list(length=50)
-            
-            if active_tasks:
-                print(f"[POLLER] Polling {len(active_tasks)} active task(s)...", flush=True)
-            
+            cursor = tasks_collection.find({"status": "ACTIVE"})
+            active_tasks = await cursor.to_list(length=100)
             for task in active_tasks:
-                task_id = task.get("yutori_task_id")
-                if not task_id:
-                    continue
-                
-                try:
-                    # Fetch updates directly from Yutori
-                    updates = fetch_yutori_updates(task_id)
-                    if not updates:
+                await poll_single_yutori_task(task)
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[YUTORI POLLER ERROR] {exc}", flush=True)
+        await asyncio.sleep(YUTORI_POLL_INTERVAL_SECONDS)
+
+
+async def daily_digest_loop() -> None:
+    """Background loop delivering daily digest bundles to users in 'daily' digest mode."""
+    await asyncio.sleep(15)
+    while True:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            today_str = now_utc.strftime("%Y-%m-%d")
+            if now_utc.hour >= DAILY_DIGEST_HOUR_UTC:
+                users = await users_collection.find({"digest_mode": "daily"}).to_list(length=500)
+                for user in users:
+                    if user.get("last_digest_date") == today_str:
                         continue
-                    
-                    print(f"[POLLER] Task {task_id[:8]}... returned {len(updates)} update(s)", flush=True)
-                    
-                    for update in updates:
-                        try:
-                            # Normalize: handle both dict and string content
-                            content = update.get("content", "") if isinstance(update, dict) else str(update)
-                            update_id = update.get("id") if isinstance(update, dict) else None
-                            
-                            # Construct a payload that process_yutori_payload expects
-                            payload = {
-                                "task_id": task_id,
-                                "findings": content,
-                                "id": update_id
-                            }
-                            # Process the finding directly
-                            from routers.yutori_webhook import process_yutori_payload
-                            await process_yutori_payload(payload)
-                            
-                            # Brief throttle to avoid spiking the queue size instantly
-                            await asyncio.sleep(0.5)
-                            
-                        except Exception as update_err:
-                            print(f"[POLLER] Error processing single update for task {task_id[:8]}...: {update_err}", flush=True)
-                            traceback.print_exc()
-                            continue  # Don't let one bad update kill the loop
-                        
-                except Exception as task_err:
-                    print(f"[POLLER] Error fetching updates for task {task_id[:8]}...: {task_err}", flush=True)
-                    traceback.print_exc()
-                    continue  # Don't let one bad task kill the loop
-                    
-        except Exception as e:
-            print(f"[POLLER] ❌ Critical Polling Loop Error: {e}", flush=True)
-            traceback.print_exc()
-            
-        await asyncio.sleep(180)  # Check every 3 minutes
+                    phone = user.get("whatsapp_phone")
+                    if phone:
+                        await send_daily_digest_for_user(phone)
+                        await users_collection.update_one(
+                            {"whatsapp_phone": phone},
+                            {"$set": {"last_digest_date": today_str}},
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[DAILY DIGEST ERROR] {exc}", flush=True)
+        await asyncio.sleep(1800)

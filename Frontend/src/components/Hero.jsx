@@ -1,10 +1,19 @@
-import React from 'react';
 import WhatsAppMockup from './WhatsAppMockup';
 
-export default function Hero() {
+export default function Hero({ isAuthenticated, onOpenWorkspace }) {
   const handleStartClick = () => {
-    const el = document.getElementById('phone-cta');
-    if (el) el.focus();
+    if (isAuthenticated && onOpenWorkspace) {
+      onOpenWorkspace();
+      return;
+    }
+    const section = document.getElementById('connect');
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth' });
+    }
+    setTimeout(() => {
+      const el = document.getElementById('phone-cta');
+      if (el) el.focus();
+    }, 300);
   };
 
   const handleSeeHowClick = () => {
@@ -20,7 +29,7 @@ export default function Hero() {
       <div className="hero-content">
         <div className="hero-badge">
           <div className="hero-badge-dot"></div>
-          WhatsApp-native &middot; AI-powered &middot; Multilingual
+          WhatsApp-native &middot; LiveScout AI &middot; EN + हिंदी
         </div>
         <h1>
           Your AI copilot for <em>every</em>
@@ -28,11 +37,11 @@ export default function Hero() {
           <span className="shimmer-text">opportunity</span>
         </h1>
         <p className="hero-sub">
-          Discover jobs, internships, hackathons, and scholarships &mdash; tracked and managed for you, right inside WhatsApp.
+          Discover live personalized jobs, internships, hackathons, and scholarships with LiveScout &amp; Sarvam AI &mdash; delivered on WhatsApp in Hindi &amp; English with deadline alerts and AI Q&amp;A.
         </p>
         <div className="hero-actions">
           <button className="btn-primary" onClick={handleStartClick}>
-            Start on WhatsApp &rarr;
+            {isAuthenticated ? 'Open Workspace \u2192' : 'Connect WhatsApp \u2192'}
           </button>
           <button className="btn-ghost" onClick={handleSeeHowClick}>
             See how it works

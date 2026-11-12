@@ -1,5 +1,3 @@
-import React from 'react';
-
 export default function OpportunityTracking() {
   return (
     <section className="section" style={{ paddingTop: 0 }}>

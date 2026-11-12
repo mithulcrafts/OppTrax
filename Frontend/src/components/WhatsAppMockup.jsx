@@ -1,19 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+
+function getFormattedTime() {
+  const now = new Date();
+  const hh = now.getHours();
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ampm = hh >= 12 ? 'PM' : 'AM';
+  const hr = hh % 12 || 12;
+  return `${hr}:${mm} ${ampm}`;
+}
 
 export default function WhatsAppMockup() {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
-  const [timeStr, setTimeStr] = useState('');
+  const [timeStr] = useState(getFormattedTime);
 
   useEffect(() => {
-    // Generate time string on component mount
-    const now = new Date();
-    const hh = now.getHours();
-    const mm = String(now.getMinutes()).padStart(2, '0');
-    const ampm = hh >= 12 ? 'PM' : 'AM';
-    const hr = hh % 12 || 12;
-    setTimeStr(`${hr}:${mm} ${ampm}`);
-
     const sequence = [
       {
         action: 'message',

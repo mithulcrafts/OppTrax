@@ -1,255 +1,213 @@
-import json
 import hashlib
-import time
-import traceback
-import asyncio
+import hmac
+import json
 from datetime import datetime, timezone
-from fastapi import APIRouter, Request, BackgroundTasks
-from config import GATEKEEPER_MODEL, generate_content_with_retry
-from database import tasks_collection, users_collection, opportunities_collection
-from services.whatsapp_api import send_opportunity_card
-from google.genai import types
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+
+from config import YUTORI_WEBHOOK_SECRET
+from database import processed_webhooks_collection, tasks_collection, users_collection
+from services.ai_engine import parse_yutori_findings
+from services.language import normalize_language
+from services.opportunity_service import save_and_notify_opportunity
+from services.whatsapp_api import send_whatsapp_message
 
 router = APIRouter()
 
-# =====================================================================
-#  TRANSPARENT SCORING YUTORI WEBHOOK 
-# =====================================================================
 
-@router.post("/yutori-webhook")
-async def receive_yutori_findings(request: Request, bg_tasks: BackgroundTasks):
-    data = await request.json()
-    bg_tasks.add_task(process_yutori_payload, data)
-    return {"status": "success"}
+def _collect_from_updates(updates: Any, text_blocks: list[str], citations: list[dict[str, Any]]) -> None:
+    if not isinstance(updates, list):
+        return
+    for upd in updates:
+        if not isinstance(upd, dict):
+            continue
+        content = upd.get("content") or upd.get("summary") or ""
+        if content:
+            text_blocks.append(str(content))
+        if upd.get("structured_result") is not None:
+            text_blocks.append(json.dumps(upd["structured_result"], ensure_ascii=False))
+        upd_cits = upd.get("citations")
+        if isinstance(upd_cits, list):
+            citations.extend(c for c in upd_cits if isinstance(c, dict))
 
-def is_valid_opportunity(title: str, summary: str, url: str) -> bool:
-    title_lower = title.lower()
-    summary_lower = summary.lower()
-    url_lower = url.lower()
-    
-    # 1. Check for invalid or missing URLs
-    if not url.startswith("http"):
-        return False
-    
-    invalid_url_patterns = [
-        "n/a", "null", "none", "link-if-available", "example.com", 
-        "placeholder", "your-link", "link_here", "url_here", "google.com/search"
-    ]
-    if any(pat in url_lower for pat in invalid_url_patterns):
-        return False
-        
-    # 2. Check for empty/no opportunity findings
-    empty_phrases = [
-        "no opportunities", "no upcoming", "no active", "no listings", 
-        "no jobs", "no internships", "no hackathons", "not found", 
-        "no match", "none found", "zero opportunities", "no results",
-        "no postings", "not available", "no matching", "no new updates"
-    ]
-    if any(phrase in title_lower for phrase in empty_phrases):
-        return False
-    if any(phrase in summary_lower for phrase in empty_phrases):
-        # If the summary is short and indicates no findings, reject it
-        if len(summary) < 200:
-            return False
-            
-    # 3. Check for placeholder titles/summaries
-    if title_lower in ["new update", "placeholder", "untitled", "test"]:
-        return False
-        
-    return True
 
-async def process_yutori_payload(data: dict):
-    """
-    Processes a crawl payload containing findings. Can be called from:
-      1. The /yutori-webhook endpoint (Yutori pushes data)
-      2. The background polling loop (we pull data)
-    
-    Must be fully idempotent — safe to call multiple times with the same data.
-    """
-    try:
-        task_id = data.get("task_id")
-        raw_findings = data.get("findings", "")
-        
-        # Normalize raw_findings to always be a string
-        if not isinstance(raw_findings, str):
-            raw_findings = json.dumps(raw_findings, default=str)
-        
-        # Skip empty findings
-        if not raw_findings or not raw_findings.strip():
-            print(f"[POLLER] Skipping empty finding for task {task_id}", flush=True)
-            return {"status": "skipped_empty"}
-        
-        task = await tasks_collection.find_one({"yutori_task_id": task_id, "status": "active"})
-        if not task:
-            return {"status": "no_active_task"}
-            
-        # ── PRE-GEMINI DEDUPLICATION ─────────────────────────────
-        # Hash the raw findings and check if we already processed this exact payload
-        raw_hash = hashlib.md5(raw_findings.encode("utf-8")).hexdigest()[:15]
-        if raw_hash in task.get("processed_raw_hashes", []):
-            print(f"[POLLER] Raw finding hash {raw_hash} already processed, skipping Gemini call.", flush=True)
-            return {"status": "skipped_duplicate_raw"}
-            
-        # Lock this hash immediately so concurrent polls don't process it either
+def _collect_from_findings(findings: Any, text_blocks: list[str]) -> None:
+    if isinstance(findings, list):
+        for item in findings:
+            if isinstance(item, dict):
+                text_blocks.append(json.dumps(item, ensure_ascii=False))
+            elif item:
+                text_blocks.append(str(item))
+    elif isinstance(findings, str) and findings.strip():
+        text_blocks.append(findings.strip())
+
+
+def _dedupe_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen_urls: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for cit in citations:
+        url = str(cit.get("url") or "").strip()
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            unique.append(cit)
+    return unique
+
+
+def normalize_yutori_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalizes scouting updates, research callbacks, and legacy webhook bodies."""
+    nested = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    task_id = payload.get("task_id") or payload.get("scout_id") or payload.get("id") or nested.get("task_id")
+
+    citations: list[dict[str, Any]] = []
+    if isinstance(payload.get("citations"), list):
+        citations.extend(c for c in payload["citations"] if isinstance(c, dict))
+
+    text_blocks: list[str] = []
+    _collect_from_updates(payload.get("updates"), text_blocks, citations)
+    _collect_from_findings(payload.get("findings"), text_blocks)
+
+    for key in ("content", "result", "summary", "text", "structured_result"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            text_blocks.append(val.strip())
+        elif isinstance(val, (dict, list)) and val:
+            text_blocks.append(json.dumps(val, ensure_ascii=False))
+
+    if not text_blocks and payload:
+        text_blocks.append(json.dumps(payload, ensure_ascii=False))
+
+    return {
+        "task_id": str(task_id) if task_id else None,
+        "status": str(payload.get("status") or ""),
+        "raw_text": "\n\n".join(text_blocks).strip(),
+        "citations": _dedupe_citations(citations),
+    }
+
+
+def _research_header(preferred_lang: str) -> str:
+    if preferred_lang == "hi":
+        return "*यूटोरी डीप रिसर्च रिपोर्ट*"
+    if preferred_lang == "en":
+        return "*Yutori Deep Research Report*"
+    return "*Yutori Deep Research Complete / यूटोरी डीप रिसर्च रिपोर्ट*"
+
+
+async def process_yutori_findings_batch(
+    task_doc: dict[str, Any],
+    raw_text: str,
+    citations: list[dict[str, Any]] | None = None,
+    notify_whatsapp: bool = True,
+) -> list[dict[str, Any]]:
+    """Parses Yutori output with Gemini, deduplicates updates, scores, stores, and notifies."""
+    if not raw_text or not raw_text.strip():
+        return []
+
+    task_id = str(task_doc.get("yutori_task_id") or task_doc.get("_id") or "unknown")
+    content_hash = hashlib.md5(f"{task_id}:{raw_text[:8000]}".encode("utf-8")).hexdigest()
+    dedup_id = f"yutori_{content_hash}"
+
+    if await processed_webhooks_collection.find_one({"_id": dedup_id}):
+        return []
+
+    owner_phone = str(task_doc.get("whatsapp_phone") or "")
+    task_type = str(task_doc.get("task_type") or "CAREER")
+    task_kind = str(task_doc.get("task_kind") or "scout")
+
+    user = await users_collection.find_one({"whatsapp_phone": owner_phone}) if owner_phone else None
+    preferred_lang = normalize_language((user or {}).get("preferred_language"), default="both")
+
+    parsed_items = await parse_yutori_findings(
+        raw_findings=raw_text,
+        task_type=task_type,
+        user_profile=(user or {}).get("profile_json"),
+        learned_preferences=(user or {}).get("learned_preferences"),
+        citations=citations,
+    )
+
+    if task_kind == "research" and notify_whatsapp and owner_phone:
+        await send_whatsapp_message(owner_phone, f"{_research_header(preferred_lang)}\n\n{raw_text[:3400]}")
+
+    saved_docs: list[dict[str, Any]] = []
+    for item in parsed_items:
+        doc = await save_and_notify_opportunity(
+            parsed=item,
+            owner_phone=owner_phone,
+            raw_content=raw_text,
+            task_id=task_id,
+            task_type=task_type,
+            citations=citations,
+            notify_whatsapp=notify_whatsapp,
+        )
+        if doc:
+            saved_docs.append(doc)
+
+    await processed_webhooks_collection.update_one(
+        {"_id": dedup_id},
+        {"$set": {"task_id": task_id, "processed_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+
+    if task_kind == "research":
         await tasks_collection.update_one(
             {"yutori_task_id": task_id},
-            {"$addToSet": {"processed_raw_hashes": raw_hash}}
+            {"$set": {"status": "COMPLETED", "last_checked": datetime.now(timezone.utc).timestamp()}},
         )
-            
-        target_phone = task["whatsapp_number"]
-        task_type = task.get("task_type", "GENERAL")
-        
-        user = await users_collection.find_one({"whatsapp_phone": target_phone})
-        profile_context = user.get("profile_json", {}) if user else {}
 
-        # ── GEMINI MULTI-FINDING PARSING ─────────────────────────────
-        parse_prompt = f"""
-        Extract ALL individual finding items or opportunities from this web crawl result:
-        {raw_findings}
-        
-        Task Type: {task_type}
-        
-        For each individual opportunity/finding found:
-        - Extract its title/role, URL, and deadline.
-        - The `summary` MUST BE HIGHLY DETAILED and highly readable. Do NOT send a wall of text.
-        - CRITICAL RULE: Format the `summary` strictly using bullet points (starting with "- ") and brief paragraphs. Leave a blank line between different sections. Include ALL relevant information provided such as exact deadlines, dates of the event, location, stipends, and specific prerequisites. 
-        - CRITICAL RULE: The `summary` MUST be under 1024 characters in length. You MUST be concise to ensure it fits within WhatsApp's strict character limits.
-        - CRITICAL RULE: DO NOT use any emojis whatsoever in your output. Your summary must be professional, clean, and purely textual.
-        - CRITICAL RULE: DO NOT start with conversational filler like "Here is...", "I found...", "Based on...". Start the summary directly with the factual content.
-        - The `title` MUST be the exact canonical name of the opportunity/event. Do NOT paraphrase or abbreviate it.
-        - If Task Type is "CAREER" and user profile is not empty, evaluate semantic relevance (0.0 to 1.0) against this profile: {profile_context}
-        - Otherwise (GENERAL or empty profile), set semantic_relevance to null and reasoning to null.
-        - Extract any application closing date or deadline and format it as ISO 8601 string (e.g., "2026-07-21T00:00:00Z"). If no explicit deadline is found, set deadline_iso to null.
-        - CRITICAL RULE: If no valid opportunities are found in the text, return an EMPTY LIST []. Do NOT return placeholder items, "no opportunities found" messages, or hallucinated events.
-        - CRITICAL RULE: Only include opportunities that have a valid, clickable application or info URL. Do NOT include items with "N/A" or missing links.
-        
-        Return a STRICT JSON list of objects:
-        [
-            {{
-                "title": "Exact Canonical Title",
-                "summary": "Highly detailed professional summary without emojis, including all dates, locations, stipends, and prerequisites. No conversational filler.",
-                "url": "https://link-if-available",
-                "deadline_iso": "2026-12-31T23:59:59Z",
-                "semantic_relevance": 0.8,
-                "reasoning": "1-sentence explanation of score (or null)"
-            }},
-            ...
-        ]
-        """
-        try:
-            res = await generate_content_with_retry(
-                model=GATEKEEPER_MODEL, 
-                contents=parse_prompt, 
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            parsed_list = json.loads(res.text.strip())
-            
-            # Handle cases where Gemini returns a single JSON object instead of a list
-            if isinstance(parsed_list, dict):
-                parsed_list = [parsed_list]
-            if not isinstance(parsed_list, list):
-                raise ValueError("Parsed output is not a list")
-        except Exception as gemini_err:
-            print(f"[POLLER] Gemini parse failed for task {task_id[:8]}: {gemini_err}", flush=True)
-            return {"status": "error_parsing"}
+    return saved_docs
 
-        # ── DEDUPLICATION: Check DB directly for each finding ─────────
-        # We query the opportunities_collection directly instead of relying
-        # on the in-memory task.findings array, which can be stale during
-        # concurrent polling cycles.
-        processed_count = 0
 
-        for parsed in parsed_list:
-            if not isinstance(parsed, dict):
-                continue
-                
-            title_str = str(parsed.get("title") or "New Update").strip()
-            url_str = str(parsed.get("url") or "N/A").strip()
-            summary_str = str(parsed.get("summary") or "").strip()
-            
-            if not is_valid_opportunity(title_str, summary_str, url_str):
-                print(f"[POLLER] Skipping invalid or empty opportunity: {title_str} | URL: {url_str}", flush=True)
-                continue
-            
-            # Generate deterministic ID: hash of task_id + normalized(title + url)
-            # Normalize to lowercase to prevent Gemini casing differences from creating duplicates
-            finding_id_src = f"{task_id}_{title_str.lower()}_{url_str.lower()}"
-            finding_id = hashlib.md5(finding_id_src.encode("utf-8")).hexdigest()[:12]
-            
-            # Deduplication: check the opportunities collection directly (authoritative source)
-            existing_opp = await opportunities_collection.find_one({"_id": finding_id})
-            if existing_opp:
-                print(f"[POLLER] Finding {finding_id} ({title_str}) is a duplicate, skipping.", flush=True)
-                continue
-                
-            processed_count += 1
+def _verify_yutori_signature(request: Request, raw_body: bytes) -> bool:
+    if not YUTORI_WEBHOOK_SECRET:
+        return True
+    sig_header = request.headers.get("X-Yutori-Signature") or request.headers.get("X-Webhook-Secret") or ""
+    auth_header = request.headers.get("Authorization") or ""
+    bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+    expected_hex = hmac.new(YUTORI_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
-            # ── DETERMINISTIC MATRIX SCORING ─────────────────────────────
-            final_priority_score = 0.5
-            reasoning_line = parsed.get("reasoning", "")
-            
-            if task_type == "CAREER":
-                s_relevance = float(parsed.get("semantic_relevance") or 0.5)
-                s_urgency = 0.5
+    for candidate in (sig_header.strip(), bearer):
+        if not candidate:
+            continue
+        clean = candidate.split("=", 1)[1].strip() if candidate.lower().startswith("sha256=") else candidate
+        if hmac.compare_digest(clean, YUTORI_WEBHOOK_SECRET) or hmac.compare_digest(clean, expected_hex):
+            return True
+    return False
 
-                deadline_str = parsed.get("deadline_iso")
-                if deadline_str:
-                    try:
-                        deadline_dt = datetime.fromisoformat(deadline_str.replace("Z", "+00:00"))
-                        time_remaining = deadline_dt - datetime.now(timezone.utc)
-                        days_left = max(0, time_remaining.days)
-                        if days_left <= 2: s_urgency = 1.0
-                        elif days_left <= 7: s_urgency = 0.8
-                        elif days_left <= 30: s_urgency = 0.5
-                        else: s_urgency = 0.2
-                    except: pass
-                    
-                final_priority_score = (0.6 * s_relevance) + (0.4 * s_urgency)
-                reasoning_line = f"Rel: {int(s_relevance*100)}% | Urg: {int(s_urgency*100)}%. Reason: {parsed.get('reasoning')}"
 
-            # Save opportunity to DB FIRST (acts as the dedup lock)
-            await opportunities_collection.insert_one({
-                "_id": finding_id,
-                "yutori_task_id": task_id,
-                "raw_content": raw_findings[:2000],
-                "title": title_str,
-                "url": url_str,
-                "summary": summary_str,
-                "deadline_iso": parsed.get("deadline_iso"),
-                "created_at": time.time()
-            })
+@router.post("/yutori-webhook")
+async def yutori_webhook_handler(request: Request) -> dict[str, Any]:
+    """Handles real-time webhook callbacks from Yutori Scouting and Research APIs."""
+    raw_body = await request.body()
+    if not _verify_yutori_signature(request, raw_body):
+        raise HTTPException(status_code=403, detail="Invalid Yutori webhook secret")
 
-            # Append to task findings array
-            finding_entry = {
-                "finding_id": finding_id,
-                "text": f"[{title_str}] {summary_str}",
-                "received_at": datetime.now(timezone.utc).isoformat()
-            }
-            await tasks_collection.update_one(
-                {"yutori_task_id": task_id},
-                {"$push": {"findings": finding_entry}}
-            )
+    try:
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else None
+    except Exception:
+        return {"status": "ignored", "reason": "invalid_json"}
 
-            # Send WhatsApp card
-            print(f"[POLLER] Sending WhatsApp notification for {finding_id} ({title_str}) to {target_phone}", flush=True)
-            send_opportunity_card(
-                to_phone=target_phone, 
-                finding_id=finding_id, 
-                title=title_str, 
-                summary=summary_str, 
-                url=url_str, 
-                task_type=task_type,
-                priority_score=final_priority_score,
-                reasoning=reasoning_line,
-                deadline=parsed.get("deadline_iso")
-            )
+    if not isinstance(payload, dict):
+        return {"status": "ignored", "reason": "invalid_payload"}
 
-            # Throttle to protect Gemini API rate limits (15 RPM free tier)
-            await asyncio.sleep(4)
+    normalized = normalize_yutori_payload(payload)
+    task_id = normalized["task_id"]
+    print(f"[YUTORI WEBHOOK] Received update for task: {task_id}", flush=True)
 
-        return {"status": "processed", "processed_count": processed_count}
-    
-    except Exception as e:
-        print(f"[POLLER] CRITICAL ERROR processing finding: {e}", flush=True)
-        traceback.print_exc()
-        return {"status": "error"}
+    task_doc = await tasks_collection.find_one({"yutori_task_id": task_id}) if task_id else None
+    if not task_doc:
+        print(f"[YUTORI WEBHOOK] Task {task_id} not found in DB; skipping.", flush=True)
+        return {"status": "ignored", "reason": "task_not_found"}
+
+    saved_docs = await process_yutori_findings_batch(
+        task_doc=task_doc,
+        raw_text=normalized["raw_text"],
+        citations=normalized["citations"],
+        notify_whatsapp=True,
+    )
+
+    return {
+        "status": "processed",
+        "task_id": task_id,
+        "saved_count": len(saved_docs),
+        "saved_ids": [d["_id"] for d in saved_docs],
+    }
