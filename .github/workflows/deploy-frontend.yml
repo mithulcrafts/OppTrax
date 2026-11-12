@@ -35,6 +35,7 @@ jobs:
       - run: npm run build
         env:
           VITE_BASE_PATH: ${{ steps.configure-pages.outputs.base_path }}
+          VITE_API_URL: https://surely-unused-submarine.ngrok-free.dev
 
       - uses: actions/upload-pages-artifact@v3
         with:

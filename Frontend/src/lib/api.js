@@ -1,6 +1,24 @@
 const SESSION_KEY = 'opptrax_session_token';
 
 export function getApiBaseUrl() {
+  if (typeof window !== 'undefined') {
+    const urlParam = new URLSearchParams(window.location.search).get('api');
+    if (urlParam) {
+      try {
+        localStorage.setItem('opptrax_custom_api_url', urlParam);
+      } catch {
+        // ignore storage errors
+      }
+      return urlParam.replace(/\/+$/, '');
+    }
+    try {
+      const saved = localStorage.getItem('opptrax_custom_api_url');
+      if (saved) return saved.replace(/\/+$/, '');
+    } catch {
+      // ignore
+    }
+  }
+
   if (import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
   }
@@ -8,6 +26,9 @@ export function getApiBaseUrl() {
     const port = window.location.port;
     if (port === '5173' || port === '4173') {
       return 'http://localhost:8000';
+    }
+    if (window.location.origin.includes('github.io')) {
+      return 'https://surely-unused-submarine.ngrok-free.dev';
     }
     return '';
   }
@@ -41,6 +62,10 @@ export async function apiRequest(path, options = {}) {
 
   if (token && !headers['X-Session-Token']) {
     headers['X-Session-Token'] = token;
+  }
+
+  if (base.includes('ngrok') && !headers['ngrok-skip-browser-warning']) {
+    headers['ngrok-skip-browser-warning'] = 'true';
   }
 
   if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) {

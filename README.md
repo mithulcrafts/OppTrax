@@ -3,8 +3,17 @@
 OppTrax is a bilingual (English + Hindi) WhatsApp and Web AI Opportunity Copilot that discovers live hackathons, internships, fellowships, and remote tech jobs via **LiveScout**, summarizes & translates them using **Sarvam AI** (with optional Gemini support), tracks deadlines, and answers follow-up eligibility/compensation questions in English or Hindi.
 
 ---
-## Live Demo Video
+
+## 🌐 Live Web Application & Product Demo
+
+[![Live Web Application](https://img.shields.io/badge/Live_Web_App-rohinth--s.github.io%2FOppTrax-00a884?style=for-the-badge&logo=githubpages&logoColor=white)](https://rohinth-s.github.io/OppTrax/)
 [![View Product Demo Video](https://img.shields.io/badge/View_Product_Demo_Video-34A853?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1NvuM3wm_IEOeaqhIG_Gyone6sVCOjzrA/view?usp=sharing)
+
+> 🚀 **Live Link:** [https://rohinth-s.github.io/OppTrax/](https://rohinth-s.github.io/OppTrax/)
+>
+> 🎥 **Video Demo:** [Watch Walkthrough](https://drive.google.com/file/d/1NvuM3wm_IEOeaqhIG_Gyone6sVCOjzrA/view?usp=sharing)
+
+---
 
 ## Key Architecture & Stack
 
