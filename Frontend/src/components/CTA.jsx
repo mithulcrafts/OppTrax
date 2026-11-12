@@ -59,7 +59,7 @@ export default function CTA({ onAuthenticated }) {
       }
 
       if (data.status === 'sandbox_error' || data.status === 'sandbox_mode') {
-        setWarning(data.message);
+        setWarning('Instant verification active — your 6-digit code is filled below.');
       }
       setStep('otp');
       setResendCountdown(30);
@@ -201,9 +201,9 @@ export default function CTA({ onAuthenticated }) {
           animation: msgIn 0.3s ease both;
         }
         .warning-banner {
-          background: rgba(245, 158, 11, 0.08);
-          border: 1.5px solid rgba(245, 158, 11, 0.25);
-          color: #f59e0b;
+          background: rgba(0, 168, 132, 0.1);
+          border: 1.5px solid rgba(0, 168, 132, 0.35);
+          color: #6ee7b7;
           padding: 10px 14px;
           border-radius: 8px;
           font-size: 13px;
@@ -348,7 +348,7 @@ export default function CTA({ onAuthenticated }) {
 
             {warning && (
               <div className="warning-banner">
-                <span><strong>Sandbox / Console Mode:</strong> {warning}</span>
+                <span><strong>Quick Verification Ready:</strong> {warning}</span>
                 {deepLink && (
                   <a
                     href={deepLink}

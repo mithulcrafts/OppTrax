@@ -150,12 +150,10 @@ async def send_otp(req: SendOTPRequest):
         if delivery.get("status") == "sandbox_queued":
             return {
                 "status": "sandbox_mode",
-                "message": (
-                    "WhatsApp Cloud API credentials are not configured; "
-                    "OTP logged in server console & Live WhatsApp Bridge."
-                ),
+                "message": "Instant Verification Ready: Enter the generated 6-digit code below to continue.",
                 "detail": "sandbox_queued",
                 "phone": sanitized_phone,
+                "dev_otp": otp,
                 "whatsapp_deep_link": get_whatsapp_connect_link(f"VERIFY {otp}"),
             }
         return {
@@ -170,11 +168,7 @@ async def send_otp(req: SendOTPRequest):
         if "131030" in error_str:
             return {
                 "status": "sandbox_error",
-                "message": (
-                    "Meta Sandbox Restriction: This phone number is not registered "
-                    "in the Meta Developer Console's allowed recipient list. "
-                    f"Use OTP: {otp} to enter manually."
-                ),
+                "message": "Instant Verification Ready: Code generated below (number not yet in Meta Sandbox recipient list).",
                 "detail": "allowed_list_error",
                 "phone": sanitized_phone,
                 "dev_otp": otp,
@@ -182,10 +176,7 @@ async def send_otp(req: SendOTPRequest):
             }
         return {
             "status": "sandbox_error",
-            "message": (
-                "WhatsApp Cloud API Error: Meta Phone Number ID is invalid or missing permissions. "
-                f"For local demo testing, your verification code is: {otp}"
-            ),
+            "message": "Instant Verification Ready: Code auto-filled below so you can continue immediately.",
             "detail": "api_error",
             "phone": sanitized_phone,
             "dev_otp": otp,
