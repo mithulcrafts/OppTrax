@@ -788,11 +788,6 @@ async def _handle_text_message(phone: str, text: str, user: dict[str, Any], is_n
     if otp_status:
         return otp_status
 
-    is_gibberish = any(re.search(p, clean, re.I) for p in GIBBERISH_PATTERNS)
-    if not (MIN_INPUT_LENGTH <= len(clean) <= MAX_INPUT_LENGTH) or is_gibberish:
-        await send_whatsapp_message(phone, "Please send a clear search query, URL, or `help`.")
-        return "invalid_input"
-
     cmd_result = await _handle_text_commands(phone, clean, user)
     if cmd_result:
         return cmd_result
@@ -801,6 +796,11 @@ async def _handle_text_message(phone: str, text: str, user: dict[str, Any], is_n
         await send_bilingual_welcome_and_onboarding(phone)
         await send_language_selector(phone)
         return "welcome_sent"
+
+    is_gibberish = any(re.search(p, clean, re.I) for p in GIBBERISH_PATTERNS)
+    if not (MIN_INPUT_LENGTH <= len(clean) <= MAX_INPUT_LENGTH) or is_gibberish:
+        await send_whatsapp_message(phone, "Please send a clear search query, URL, or `help`.")
+        return "invalid_input"
 
     return await _handle_freeform_text(phone, clean, lower, user, lang)
 

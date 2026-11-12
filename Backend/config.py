@@ -122,10 +122,11 @@ GEMINI_FALLBACK_MODELS = [
     if m.strip()
 ]
 
-MIN_INPUT_LENGTH = 2
+MIN_INPUT_LENGTH = 3
 MAX_INPUT_LENGTH = 1000
 GIBBERISH_PATTERNS = {
     "asdf",
+    "asdk",
     "qwer",
     "zxcv",
     "jkl;",
